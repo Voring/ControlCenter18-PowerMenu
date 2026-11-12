@@ -119,13 +119,13 @@ static UIMenu *C18BuildMenu(void) {
     NSMutableArray<UIMenuElement *> *children = [NSMutableArray array];
 
     NSArray<NSDictionary *> *items = @[
-        @{@"title": @"快速注销", @"glyph": @"circle.dashed",                     @"action": @(C18PowerActionSoftRespring)},
-        @{@"title": @"强制注销", @"glyph": @"circle.dashed.inset.filled",        @"action": @(C18PowerActionHardRespring)},
-        @{@"title": @"重启桌面", @"glyph": @"rectangle.on.rectangle",            @"action": @(C18PowerActionRestartDesktop)},
-        @{@"title": @"安全模式", @"glyph": @"shield.lefthalf.filled",            @"action": @(C18PowerActionSafeMode)},
-        @{@"title": @"重启空间", @"glyph": @"arrow.clockwise.circle",            @"action": @(C18PowerActionUserspaceReboot)},
-        @{@"title": @"重启设备", @"glyph": @"exclamationmark.arrow.circlepath",  @"action": @(C18PowerActionReboot)},
-        @{@"title": @"设备关机", @"glyph": @"power",                             @"action": @(C18PowerActionShutdown)},
+        @{@"title": @"快速注销", @"glyph": @"rays",                         @"action": @(C18PowerActionSoftRespring)},
+        @{@"title": @"强制注销", @"glyph": @"slowmo",                       @"action": @(C18PowerActionHardRespring)},
+        @{@"title": @"重启桌面", @"glyph": @"apps.iphone",                  @"action": @(C18PowerActionRestartDesktop)},
+        @{@"title": @"安全模式", @"glyph": @"shield.lefthalf.filled",        @"action": @(C18PowerActionSafeMode)},
+        @{@"title": @"重启空间", @"glyph": @"arrow.clockwise.circle",        @"action": @(C18PowerActionUserspaceReboot)},
+        @{@"title": @"重启设备", @"glyph": @"exclamationmark.arrow.circlepath", @"action": @(C18PowerActionReboot)},
+        @{@"title": @"设备关机", @"glyph": @"power",                         @"action": @(C18PowerActionShutdown)},
     ];
 
     for (NSDictionary *item in items) {
