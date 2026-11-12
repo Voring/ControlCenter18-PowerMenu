@@ -1,10 +1,11 @@
 // C18PowerMenu - power menu for ControlCenter18 (iOS 16 / 17, roothide)
 //
 // The long press on CC18's power glyph (top-right of Control Center) still ends
-// up in presentPowerDownTransientOverlay, which we hook. The card copies the
-// system menu look - same blurred material, title on the left, SF symbol on the
-// right - pinned right under that glyph. The overlay lives inside the existing
-// key window (a brand-new UIWindow in SpringBoard does not receive touches).
+// up in presentPowerDownTransientOverlay, which we hook. We show a card that
+// copies the system menu look - same blurred material, title on the left, SF
+// symbol on the right - pinned right under that glyph. The card lives inside
+// the existing key window (a brand-new UIWindow in SpringBoard does not reliably
+// receive touches).
 
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -13,8 +14,6 @@
 #import <spawn.h>
 #import <sys/wait.h>
 #import <fcntl.h>
-#import <signal.h>
-#import <unistd.h>
 
 extern char **environ;
 
@@ -22,7 +21,7 @@ typedef void (*PresentIMP)(id, SEL);
 
 typedef NS_ENUM(NSInteger, C18PowerAction) {
     C18PowerActionSoftRespring = 0,   // 快速注销
-    C18PowerActionHardRespring,       // 强制注销 (reserved, no row)
+    C18PowerActionHardRespring,       // 强制注销 (reserved)
     C18PowerActionRestartDesktop,     // 重启桌面
     C18PowerActionSafeMode,           // 安全模式
     C18PowerActionUserspaceReboot,    // 重启空间
@@ -92,7 +91,6 @@ static BOOL C18SpawnPath(NSString *path, NSArray<NSString *> *args) {
     pid_t pid = 0;
     int rc = posix_spawn(&pid, path.UTF8String, &actions, NULL, (char *const *)argv, environ);
     posix_spawn_file_actions_destroy(&actions);
-    C18Log(@"posix_spawn(%@) rc=%d errno=%d", path, rc, rc == 0 ? 0 : errno);
     return rc == 0 && pid > 0;
 }
 
@@ -102,15 +100,15 @@ static void C18Run(NSString *relative, NSArray<NSString *> *args) {
             C18Log(@"skip %@ (not executable)", path);
             continue;
         }
-        if (C18SpawnPath(path, args)) return;
+        BOOL ok = C18SpawnPath(path, args);
+        C18Log(@"spawn %@ %@ -> %d", path, [args componentsJoinedByString:@" "], ok);
+        if (ok) return;
     }
-    C18Log(@"spawn %@ FAILED", relative);
+    C18Log(@"spawn %@ FAILED (no executable candidate)", relative);
 }
 
 #pragma mark - actions
 
-// Killing SpringBoard is the sure way to respring: backboardd relaunches it.
-// posix_spawn of killall from inside SpringBoard is blocked by the sandbox.
 static void C18KillSelf(int signal) {
     C18Log(@"kill SpringBoard with signal %d", signal);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -118,6 +116,8 @@ static void C18KillSelf(int signal) {
     });
 }
 
+// Some SpringBoard builds expose reboot/shutdown helpers; use them before
+// falling back to spawning a binary (which the sandbox often blocks).
 static BOOL C18CallSystemService(NSArray<NSString *> *selectors) {
     Class cls = NSClassFromString(@"FBSystemService");
     if (!cls) return NO;
@@ -174,7 +174,7 @@ static void C18RunAction(C18PowerAction action) {
                 C18Log(@"shutdown via SBLockScreenManager");
                 ((void (*)(id, SEL))objc_msgSend)(inst, sel);
             } else if (!C18CallSystemService(@[@"shutdown", @"exitAndShutdown"])) {
-                C18Log(@"shutdown failed (instance=%d)", inst != nil);
+                C18Log(@"shutdown fallback failed (instance=%d)", inst != nil);
             }
             break;
         }
@@ -219,20 +219,18 @@ static CGRect C18GlyphRect(void) {
     return CGRectMake(screen.size.width - 56, 40, 40, 40);
 }
 
-#pragma mark - layout constants
+#pragma mark - menu card
 
 static const CGFloat kRowHeight = 46.0;
 
-// The card is exactly the system context-menu material (SystemChromeMaterial),
-// so it needs no tuning. Only the background is ours: the system context menu
-// blurs the background but keeps it readable - a 0.70 ultra-thin dark layer
-// plus a light 0.10 dim. Everything tunable lives here, one value per line.
-static const CGFloat kBackdropAlpha = 0.70;
-static const CGFloat kDimAlpha = 0.10;
+// Backdrop numbers: iOS home-screen context menus do not stack a half-transparent
+// blur plus a heavy dim - they run one full-strength system material and let the
+// material do the darkening. Thin material at alpha 1.0 is the closest public
+// equivalent, so we keep the extra dim down to a hairline 0.06.
+static const CGFloat kBackdropAlpha = 1.0;
+static const CGFloat kDimAlpha = 0.06;
 static const CGFloat kNudgeX = 11.5;   // half a row left, a quarter row back right
 static const CGFloat kNudgeY = 23.0;   // half a row down
-
-#pragma mark - menu card
 
 @interface C18MenuCard : UIView
 @property (nonatomic, strong) UIVisualEffectView *blur;
@@ -317,7 +315,7 @@ static const CGFloat kNudgeY = 23.0;   // half a row down
     [row addSubview:label];
 
     UIImageView *icon = [[UIImageView alloc] init];
-    UIImageConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightSemibold];
+    UIImageConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:14 weight:UIImageSymbolWeightSemibold];
     icon.image = [UIImage systemImageNamed:glyph withConfiguration:cfg];
     icon.tintColor = destructive ? [UIColor systemRedColor] : [UIColor labelColor];
     icon.contentMode = UIViewContentModeScaleAspectFit;
@@ -333,8 +331,8 @@ static const CGFloat kNudgeY = 23.0;   // half a row down
         [label.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
         [icon.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-16],
         [icon.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-        [icon.widthAnchor constraintEqualToConstant:24],
-        [icon.heightAnchor constraintEqualToConstant:24],
+        [icon.widthAnchor constraintEqualToConstant:20],
+        [icon.heightAnchor constraintEqualToConstant:20],
     ]];
 
     if (!last) {
@@ -426,16 +424,16 @@ static BOOL C18ShowMenu(void) {
 
     CGRect glyph = C18GlyphRect();
     CGRect screen = host.bounds;
-    C18Log(@"glyph=%.1f,%.1f,%.1f,%.1f screen=%.1fx%.1f layerVars=%d",
+    C18Log(@"glyph=%.1f,%.1f,%.1f,%.1f screen=%.1fx%.1f",
            glyph.origin.x, glyph.origin.y, glyph.size.width, glyph.size.height,
-           screen.size.width, screen.size.height, glyph.size.width == 40);
+           screen.size.width, screen.size.height);
 
     C18MenuViewController *vc = [[C18MenuViewController alloc] init];
 
     UIView *overlay = [[UIView alloc] initWithFrame:screen];
     overlay.backgroundColor = [UIColor clearColor];
 
-    UIVisualEffectView *backdrop = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
+    UIVisualEffectView *backdrop = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
     backdrop.frame = screen;
     backdrop.alpha = kBackdropAlpha;
     backdrop.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -463,6 +461,7 @@ static BOOL C18ShowMenu(void) {
     CGFloat x = MIN(MAX(glyph.origin.x + glyph.size.width - cardWidth, 12), right - cardWidth);
     CGFloat y = glyph.origin.y + glyph.size.height + 8;
 
+    // Nudge so the card lines up under the power button instead of beside it.
     x -= kNudgeX;
     y -= kNudgeY;
     if (x < 12) x = 12;
@@ -476,8 +475,8 @@ static BOOL C18ShowMenu(void) {
     [overlay addSubview:card];
 
     // The real glyph sits behind the blur; redraw it as a floating circle at its
-    // own spot, nudged with the same offsets as the card so the two stay paired,
-    // using the card's own material.
+    // own spot - nudged with the same offsets as the card - using the same
+    // material as the card so the two read as one layer.
     CGFloat side = MAX(34, MIN(glyph.size.width, 42));
     UIView *circle = [[UIView alloc] initWithFrame:CGRectMake(CGRectGetMidX(glyph) - side / 2 - kNudgeX,
                                                              CGRectGetMidY(glyph) - side / 2 - kNudgeY,
@@ -542,7 +541,6 @@ static BOOL C18ShowMenu(void) {
         backdrop.alpha = kBackdropAlpha;
         dim.alpha = 1;
     } completion:nil];
-
     g_overlay = overlay;
     g_menuVC = vc;
     C18Log(@"show menu at %.1f,%.1f size %.1fx%.1f", x, y, cardWidth, cardHeight);
