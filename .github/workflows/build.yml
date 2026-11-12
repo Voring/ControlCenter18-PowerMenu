@@ -84,20 +84,18 @@ jobs:
           ls -l dist/*.deb || { echo "no deb, skip release"; exit 0; }
           DEB=$(ls -t dist/*.deb | head -1)
           cp "$DEB" /tmp/C18PowerMenu_roothide_arm64e.deb
-          TAG="v1.4.0"
+          TAG="v1.4.1"
           cat > /tmp/notes.md <<'NOTES'
-          C18 Power Menu 1.4.0（roothide / arm64e）
+          C18 Power Menu 1.4.1（roothide / arm64e）
 
-          自绘 UI 与全屏蒙版已全部删除。现在的菜单是系统的 UIMenu + UIAction，挂在按钮上由 UIKit 自己渲染（和 CCBorder 顶部操作按钮同一套做法），所以没有我们画的卡片和遮罩。
+          修复 1.4.0 长按不弹菜单：保留 presentPowerDownTransientOverlay hook，长按触发后先把菜单按钮挂到电源图标上，再主动触发它的主操作，由 UIKit 弹出系统 UIMenu。
 
-          长按控制中心右上角电源图标弹出菜单：快速注销 / 强制注销 / 重启桌面 / 安全模式 / 重启空间 / 重启设备 / 设备关机 / 取消操作。
-
-          命令：sbreload、killall -9 SpringBoard、killall SpringBoard、killall -SEGV SpringBoard、launchctl reboot userspace、reboot，关机则调 SBLockScreenManager 的 presentPowerDownTransientOverlay。
+          菜单仍为系统原生渲染：快速注销 / 强制注销 / 重启桌面 / 安全模式 / 重启空间 / 重启设备 / 设备关机 / 取消操作，无自绘卡片、无遮罩。
           NOTES
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb --clobber
-            gh release edit "$TAG" --title "C18 Power Menu 1.4.0 (roothide / arm64e)" --notes-file /tmp/notes.md
+            gh release edit "$TAG" --title "C18 Power Menu 1.4.1 (roothide / arm64e)" --notes-file /tmp/notes.md
           else
             gh release create "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb \
-              --title "C18 Power Menu 1.4.0 (roothide / arm64e)" --notes-file /tmp/notes.md
+              --title "C18 Power Menu 1.4.1 (roothide / arm64e)" --notes-file /tmp/notes.md
           fi

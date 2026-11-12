@@ -3,7 +3,8 @@
 // Same approach as CCBorder's top actions button: a plain UIButton carrying a
 // UIMenu built from UIActions, with showsMenuAsPrimaryAction enabled. UIKit
 // renders the menu itself, anchored to the button, so there is no custom card
-// and no dimming overlay of our own.
+// and no dimming overlay of our own. The presentPowerDownTransientOverlay hook
+// re-installs the button and fires its primary action on the CC long press.
 
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -15,6 +16,8 @@
 
 extern char **environ;
 
+typedef void (*PresentIMP)(id, SEL);
+
 typedef NS_ENUM(NSInteger, C18PowerAction) {
     C18PowerActionSoftRespring = 0,   // 快速注销
     C18PowerActionHardRespring,       // 强制注销
@@ -24,6 +27,11 @@ typedef NS_ENUM(NSInteger, C18PowerAction) {
     C18PowerActionReboot,             // 重启设备
     C18PowerActionShutdown,           // 设备关机
 };
+
+static PresentIMP g_orig[16];
+static Class g_cls[16];
+static int g_count = 0;
+static UIButton *g_menuButton = nil;
 
 #pragma mark - jbroot / spawn
 
@@ -147,7 +155,8 @@ static char kC18MenuButtonKey;
 
 static UIView *C18FindPowerView(UIView *view) {
     NSString *lower = NSStringFromClass([view class]).lowercaseString;
-    if ([lower containsString:@"power"] && view.window) {
+    BOOL looksLikePower = [lower containsString:@"power"] || [lower containsString:@"c18power"];
+    if (looksLikePower && view.window) {
         CGSize s = view.bounds.size;
         if (s.width >= 24 && s.height >= 24) return view;
     }
@@ -170,7 +179,8 @@ static UIView *C18RootForScan(void) {
 
 static void C18InstallMenuButton(UIView *powerView) {
     if (!powerView) return;
-    if (objc_getAssociatedObject(powerView, &kC18MenuButtonKey)) return;
+    UIButton *existing = objc_getAssociatedObject(powerView, &kC18MenuButtonKey);
+    if (existing) { g_menuButton = existing; return; }
 
     UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
     button.frame = powerView.bounds;
@@ -182,9 +192,83 @@ static void C18InstallMenuButton(UIView *powerView) {
 
     [powerView addSubview:button];
     objc_setAssociatedObject(powerView, &kC18MenuButtonKey, button, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    g_menuButton = button;
 }
 
-#pragma mark - CC overlay hook
+static void C18OpenMenu(void) {
+    if (!g_menuButton) C18InstallMenuButton(C18RootForScan());
+    if (!g_menuButton) return;
+
+    // The button already carries the menu; fire its primary action so UIKit
+    // presents the system menu anchored to the power button.
+    [g_menuButton sendActionsForControlEvents:UIControlEventTouchUpInside];
+}
+
+#pragma mark - presentPowerDownTransientOverlay hook
+
+static PresentIMP C18OriginalFor(id object) {
+    for (int i = 0; i < g_count; i++) {
+        if ([object isKindOfClass:g_cls[i]]) return g_orig[i];
+    }
+    return NULL;
+}
+
+static void C18PowerMenuHook(id self, SEL cmd) {
+    PresentIMP original = C18OriginalFor(self);
+
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            C18PowerMenuHook(self, cmd);
+        });
+        return;
+    }
+
+    @try {
+        C18OpenMenu();
+    } @catch (__unused NSException *exception) {
+        if (original) original(self, cmd);
+    }
+}
+
+static BOOL C18ClassImplements(Class cls, SEL sel) {
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(cls, &count);
+    BOOL found = NO;
+    for (unsigned int i = 0; i < count; i++) {
+        if (method_getName(methods[i]) == sel) { found = YES; break; }
+    }
+    free(methods);
+    return found;
+}
+
+static void C18InstallPowerHook(void) {
+    SEL sel = sel_registerName("presentPowerDownTransientOverlay");
+    int num = objc_getClassList(NULL, 0);
+    if (num <= 0) return;
+
+    Class *classes = (Class *)malloc(sizeof(Class) * num);
+    num = objc_getClassList(classes, num);
+
+    for (int i = 0; i < num && g_count < 16; i++) {
+        Class cls = classes[i];
+        if (!C18ClassImplements(cls, sel)) continue;
+
+        Method method = class_getInstanceMethod(cls, sel);
+        if (!method) continue;
+
+        IMP original = method_getImplementation(method);
+        if (original == (IMP)C18PowerMenuHook) continue;
+
+        g_cls[g_count] = cls;
+        g_orig[g_count] = (PresentIMP)original;
+        g_count++;
+        method_setImplementation(method, (IMP)C18PowerMenuHook);
+    }
+
+    free(classes);
+}
+
+#pragma mark - CC overlay hook (re-install button after CC appears)
 
 static void (*g_origViewDidAppear)(id, SEL, BOOL) = NULL;
 
@@ -212,9 +296,17 @@ static void C18InstallOverlayHook(void) {
 
 __attribute__((constructor)) static void C18PowerMenuInit(void) {
     @autoreleasepool {
+        C18InstallPowerHook();
         C18InstallOverlayHook();
+
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             C18InstallMenuButton(C18RootForScan());
         });
+
+        if (g_count == 0) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                if (g_count == 0) C18InstallPowerHook();
+            });
+        }
     }
 }
