@@ -14,6 +14,6 @@ ld: warning: -multiply_defined is obsolete
 dm.pl: building package `com.iosdump.c18powermenu:iphoneos-arm64e' in `./packages/com.iosdump.c18powermenu_1.7.4_iphoneos-arm64e.deb'
 + ls -l packages
 total 32
--rw-r--r--  1 runner  staff  13426 Nov 12 15:11 com.iosdump.c18powermenu_1.7.4_iphoneos-arm64e.deb
+-rw-r--r--  1 runner  staff  13446 Nov 12 15:12 com.iosdump.c18powermenu_1.7.4_iphoneos-arm64e.deb
 + mkdir -p dist
 + cp packages/com.iosdump.c18powermenu_1.7.4_iphoneos-arm64e.deb dist/
