@@ -84,22 +84,18 @@ jobs:
           ls -l dist/*.deb || { echo "no deb, skip release"; exit 0; }
           DEB=$(ls -t dist/*.deb | head -1)
           cp "$DEB" /tmp/C18PowerMenu_roothide_arm64e.deb
-          TAG="v1.6.1"
+          TAG="v1.6.2"
           cat > /tmp/notes.md <<'NOTES'
-          C18 Power Menu 1.6.1（roothide / arm64e）
+          C18 Power Menu 1.6.2（roothide / arm64e）
 
-          菜单现在锚定在 ControlCenter18 右上角那颗电源图标本身：直接按控件类名（C18PowerGlyphView）定位，不再用“从左往右”的比例推算，横屏也按右边缘和顶部对齐。
+          图标按你指定的改：快速注销 = rays，强制注销 = slowmo，重启桌面 = apps.iphone；安全模式/重启空间/重启设备/设备关机/取消操作保持不变。
 
-          菜单由 UIContextMenuInteraction 让 UIKit 渲染：文字在左、SF 图标在右，系统自带轻微模糊蒙版，无自绘 UI。
-
-          修复重复长按：每次长按使用全新的 interaction，并在菜单打开/关闭动画期间互斥，不会再第三次卡出系统原来的关机浮层。
-
-          条目：快速注销 / 强制注销 / 重启桌面 / 安全模式 / 重启空间 / 重启设备 / 设备关机 / 取消操作。
+          锚定仍按电源控件本身定位（类名 C18PowerGlyphView 优先，横屏用右边缘+顶部兜底），菜单由 UIContextMenuInteraction 交给 UIKit 渲染。
           NOTES
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb --clobber
-            gh release edit "$TAG" --title "C18 Power Menu 1.6.1 (roothide / arm64e)" --notes-file /tmp/notes.md
+            gh release edit "$TAG" --title "C18 Power Menu 1.6.2 (roothide / arm64e)" --notes-file /tmp/notes.md
           else
             gh release create "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb \
-              --title "C18 Power Menu 1.6.1 (roothide / arm64e)" --notes-file /tmp/notes.md
+              --title "C18 Power Menu 1.6.2 (roothide / arm64e)" --notes-file /tmp/notes.md
           fi
