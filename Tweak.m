@@ -1,11 +1,10 @@
 // C18PowerMenu - power menu for ControlCenter18 (iOS 16 / 17, roothide)
 //
-// Menu is a plain UIMenu of UIActions (same as CCBorder's top actions button),
-// rendered by UIKit itself as a light rounded card: text left, SF symbol right,
-// over its own blurred backdrop. Long press on CC18's power glyph ends up in
-// presentPowerDownTransientOverlay, which we keep hooking. A fresh
-// UIContextMenuInteraction presents the card right under that glyph; only when
-// it really accepts the request do we drop the original call.
+// The long press on CC18's power glyph (top-right of Control Center) still ends
+// up in presentPowerDownTransientOverlay, which we hook. Instead of letting
+// UIKit place a menu wherever it likes, we show a card that copies the system
+// menu look - same blurred material, title on the left, SF symbol on the right
+// - and pin it right under that glyph.
 
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -27,13 +26,27 @@ typedef NS_ENUM(NSInteger, C18PowerAction) {
     C18PowerActionUserspaceReboot,    // 重启空间
     C18PowerActionReboot,             // 重启设备
     C18PowerActionShutdown,           // 设备关机
+    C18PowerActionCancel,             // 取消
 };
 
 static PresentIMP g_orig[16];
 static Class g_cls[16];
 static int g_count = 0;
 
-static __weak UIView *g_overlayView = nil;
+#pragma mark - logging
+
+static void C18Log(NSString *format, ...) {
+    va_list args;
+    va_start(args, format);
+    NSString *line = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+
+    NSString *path = @"/var/mobile/Library/C18PowerMenu.log";
+    NSString *old = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:NULL] ?: @"";
+    if (old.length > 4000) old = [old substringFromIndex:old.length - 2000];
+    NSString *content = [old stringByAppendingFormat:@"%@ %@\n", [NSDate date], line];
+    [content writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+}
 
 #pragma mark - jbroot / spawn
 
@@ -52,14 +65,14 @@ static NSString *C18JBRoot(void) {
     return root;
 }
 
-static NSString *C18Tool(NSString *relative) {
+// roothide keeps its binaries under the jbroot; also accept the plain path.
+static NSArray<NSString *> *C18Candidates(NSString *relative) {
     NSString *full = [C18JBRoot() stringByAppendingPathComponent:relative];
-    if ([[NSFileManager defaultManager] fileExistsAtPath:full]) return full;
-    return relative;
+    if ([full isEqualToString:relative]) return @[relative];
+    return @[full, relative];
 }
 
-static void C18Spawn(NSString *relative, NSArray<NSString *> *args) {
-    NSString *path = C18Tool(relative);
+static BOOL C18SpawnPath(NSString *path, NSArray<NSString *> *args) {
     const char *argv[16];
     int i = 0;
     argv[i++] = strdup(path.UTF8String);
@@ -76,122 +89,72 @@ static void C18Spawn(NSString *relative, NSArray<NSString *> *args) {
     posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
 
     pid_t pid = 0;
-    if (posix_spawn(&pid, path.UTF8String, &actions, NULL, (char *const *)argv, environ) == 0 && pid > 0) {
-        waitpid(pid, NULL, WNOHANG);
-    }
+    int rc = posix_spawn(&pid, path.UTF8String, &actions, NULL, (char *const *)argv, environ);
     posix_spawn_file_actions_destroy(&actions);
+    return rc == 0 && pid > 0;
+}
+
+static void C18Run(NSString *relative, NSArray<NSString *> *args) {
+    for (NSString *path in C18Candidates(relative)) {
+        if (![[NSFileManager defaultManager] isExecutableFileAtPath:path]) {
+            C18Log(@"skip %@ (not executable)", path);
+            continue;
+        }
+        BOOL ok = C18SpawnPath(path, args);
+        C18Log(@"spawn %@ %@ -> %d", path, [args componentsJoinedByString:@" "], ok);
+        if (ok) return;
+    }
+    C18Log(@"spawn %@ FAILED (no executable candidate)", relative);
 }
 
 #pragma mark - actions
 
 static void C18RunAction(C18PowerAction action) {
+    C18Log(@"action %ld", (long)action);
     switch (action) {
-        case C18PowerActionSoftRespring:   C18Spawn(@"/usr/bin/sbreload", @[]); break;
-        case C18PowerActionHardRespring:   C18Spawn(@"/usr/bin/killall", @[@"-9", @"SpringBoard"]); break;
-        case C18PowerActionRestartDesktop: C18Spawn(@"/usr/bin/killall", @[@"SpringBoard"]); break;
-        case C18PowerActionSafeMode:       C18Spawn(@"/usr/bin/killall", @[@"-SEGV", @"SpringBoard"]); break;
-        case C18PowerActionUserspaceReboot:C18Spawn(@"/bin/launchctl", @[@"reboot", @"userspace"]); break;
-        case C18PowerActionReboot:         C18Spawn(@"/usr/bin/reboot", @[]); break;
+        case C18PowerActionSoftRespring:
+            C18Run(@"/usr/bin/sbreload", @[]);
+            break;
+        case C18PowerActionHardRespring:
+            C18Run(@"/usr/bin/killall", @[@"-9", @"SpringBoard"]);
+            break;
+        case C18PowerActionRestartDesktop:
+            C18Run(@"/usr/bin/killall", @[@"SpringBoard"]);
+            break;
+        case C18PowerActionSafeMode:
+            C18Run(@"/usr/bin/killall", @[@"-SEGV", @"SpringBoard"]);
+            break;
+        case C18PowerActionUserspaceReboot:
+            C18Run(@"/bin/launchctl", @[@"reboot", @"userspace"]);
+            break;
+        case C18PowerActionReboot:
+            C18Run(@"/usr/bin/reboot", @[]);
+            break;
         case C18PowerActionShutdown: {
             Class mgr = NSClassFromString(@"SBLockScreenManager");
-            id inst = nil;
             SEL sharedSel = NSSelectorFromString(@"sharedInstanceIfExists");
+            id inst = nil;
             if ([mgr respondsToSelector:sharedSel]) {
                 inst = ((id (*)(id, SEL))objc_msgSend)(mgr, sharedSel);
             }
             SEL sel = NSSelectorFromString(@"presentPowerDownTransientOverlay");
             if (inst && [inst respondsToSelector:sel]) {
+                C18Log(@"shutdown via SBLockScreenManager");
                 ((void (*)(id, SEL))objc_msgSend)(inst, sel);
+            } else {
+                C18Log(@"shutdown fallback (instance=%d)", inst != nil);
+                C18Run(@"/usr/bin/halt", @[]);
             }
             break;
         }
+        case C18PowerActionCancel:
+            break;
     }
 }
 
-#pragma mark - menu
+#pragma mark - power glyph lookup
 
-static UIImage *C18Glyph(NSString *name) {
-    UIImageConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightMedium];
-    return [UIImage systemImageNamed:name withConfiguration:cfg];
-}
-
-static UIMenu *C18BuildMenu(void) {
-    NSMutableArray<UIMenuElement *> *children = [NSMutableArray array];
-
-    NSArray<NSDictionary *> *items = @[
-        @{@"title": @"快速注销", @"glyph": @"rays",                         @"action": @(C18PowerActionSoftRespring)},
-        @{@"title": @"强制注销", @"glyph": @"slowmo",                       @"action": @(C18PowerActionHardRespring)},
-        @{@"title": @"重启桌面", @"glyph": @"apps.iphone",                  @"action": @(C18PowerActionRestartDesktop)},
-        @{@"title": @"安全模式", @"glyph": @"shield.lefthalf.filled",        @"action": @(C18PowerActionSafeMode)},
-        @{@"title": @"重启空间", @"glyph": @"arrow.clockwise.circle",        @"action": @(C18PowerActionUserspaceReboot)},
-        @{@"title": @"重启设备", @"glyph": @"exclamationmark.arrow.circlepath", @"action": @(C18PowerActionReboot)},
-        @{@"title": @"设备关机", @"glyph": @"power",                         @"action": @(C18PowerActionShutdown)},
-    ];
-
-    for (NSDictionary *item in items) {
-        C18PowerAction act = (C18PowerAction)[item[@"action"] integerValue];
-        UIAction *action = [UIAction actionWithTitle:item[@"title"]
-                                                image:C18Glyph(item[@"glyph"])
-                                           identifier:item[@"title"]
-                                              handler:^(__unused UIAction *a) {
-            C18RunAction(act);
-        }];
-        [children addObject:action];
-    }
-
-    UIAction *cancel = [UIAction actionWithTitle:@"取消操作"
-                                            image:C18Glyph(@"trash")
-                                       identifier:@"cancel"
-                                          handler:^(__unused UIAction *a) {}];
-    if (@available(iOS 15.0, *)) {
-        cancel.attributes = UIMenuElementAttributesDestructive;
-    }
-    [children addObject:cancel];
-
-    return [UIMenu menuWithTitle:@"" children:children];
-}
-
-#pragma mark - context menu
-
-// UIContextMenuInteraction renders UIMenu exactly like a system card: text on
-// the left, SF symbol on the right, over its own blurred backdrop.
-static BOOL g_menuOpen = NO;
-static NSTimeInterval g_menuClosedAt = 0;
-
-@interface C18MenuDelegate : NSObject <UIContextMenuInteractionDelegate>
-@end
-
-@implementation C18MenuDelegate
-
-- (void)contextMenuInteraction:(UIContextMenuInteraction *)interaction
-   willDisplayMenuForConfiguration:(UIContextMenuConfiguration *)configuration
-                       animator:(id<UIContextMenuInteractionAnimating>)animator {
-    g_menuOpen = YES;
-}
-
-- (void)contextMenuInteraction:(UIContextMenuInteraction *)interaction
-      willEndForConfiguration:(UIContextMenuConfiguration *)configuration
-                       animator:(id<UIContextMenuInteractionAnimating>)animator {
-    g_menuOpen = NO;
-    g_menuClosedAt = [NSDate timeIntervalSinceReferenceDate];
-}
-
-- (UIContextMenuConfiguration *)contextMenuInteraction:(UIContextMenuInteraction *)interaction
-                        configurationForMenuAtLocation:(CGPoint)location {
-    return [UIContextMenuConfiguration configurationWithIdentifier:nil
-                                                   previewProvider:nil
-                                                    actionProvider:^UIMenu * _Nullable(NSArray<UIMenuElement *> *suggestedActions) {
-        return C18BuildMenu();
-    }];
-}
-
-@end
-
-static C18MenuDelegate *g_delegate = nil;
-static UIContextMenuInteraction *g_interaction = nil;
-static UIView *g_anchorView = nil;
-
-// CC18 draws its power icon in a small view whose class name mentions "power"
+// CC18 draws the power icon in a small view whose class name mentions "power"
 // (C18PowerGlyphView and friends). Look that view up directly instead of
 // guessing from the left edge, which also keeps it correct in landscape.
 static UIView *C18FindPowerView(UIView *view) {
@@ -200,7 +163,7 @@ static UIView *C18FindPowerView(UIView *view) {
 
     if (nameHit && view.window) {
         CGSize s = view.bounds.size;
-        if (s.width >= 14 && s.width <= 100 && s.height >= 14 && s.height <= 100) return view;
+        if (s.width >= 14 && s.width <= 110 && s.height >= 14 && s.height <= 110) return view;
     }
     for (UIView *sub in view.subviews) {
         UIView *hit = C18FindPowerView(sub);
@@ -209,107 +172,275 @@ static UIView *C18FindPowerView(UIView *view) {
     return nil;
 }
 
-static CGRect C18GlyphRect(UIView *overlay) {
-    UIView *power = C18FindPowerView(overlay);
-    if (power) return [power convertRect:power.bounds toView:overlay];
-
-    // Fallback: anchored to the top trailing corner, so landscape stays right.
-    CGFloat top = overlay.safeAreaInsets.top;
-    if (top <= 0 && overlay.window) top = overlay.window.safeAreaInsets.top;
-    CGFloat x = overlay.bounds.size.width - 64;
-    CGFloat y = MAX(top, 8) + 6;
-    return CGRectMake(x, y, 40, 40);
-}
-
-static void C18AnchorViewFor(UIView *overlay) {
-    CGRect glyph = C18GlyphRect(overlay);
-    CGRect frame = CGRectInset(glyph, -8, -8);
-
-    if (!g_anchorView || g_anchorView.superview != overlay) {
-        [g_anchorView removeFromSuperview];
-        g_anchorView = [[UIView alloc] initWithFrame:frame];
-        g_anchorView.backgroundColor = [UIColor clearColor];
-        g_anchorView.userInteractionEnabled = NO;
-        g_anchorView.alpha = 0.01;
-        [overlay addSubview:g_anchorView];
-    } else {
-        g_anchorView.frame = frame;
-    }
-}
-
 static UIView *C18OverlayView(void) {
-    if (g_overlayView && g_overlayView.window) return g_overlayView;
-
     Class cc = NSClassFromString(@"CCUIModularControlCenterOverlayViewController");
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
         id vc = w.rootViewController;
         if (![vc isKindOfClass:cc]) continue;
-        UIView *view = ((UIViewController *)vc).view;
-        if (view.window) {
-            g_overlayView = view;
-            return view;
-        }
+        if (((UIViewController *)vc).view.window) return ((UIViewController *)vc).view;
     }
     return nil;
 }
 
-// Returns YES only when the interaction really presents the card menu.
-static BOOL C18PresentMenu(NSString **outReason) {
+// Glyph frame in screen coordinates.
+static CGRect C18GlyphRect(void) {
     UIView *overlay = C18OverlayView();
-    if (!overlay) {
-        if (outReason) *outReason = @"no overlay";
+    UIView *power = overlay ? C18FindPowerView(overlay) : nil;
+    if (power) return [power convertRect:power.bounds toView:nil];
+
+    CGRect screen = [UIScreen mainScreen].bounds;
+    return CGRectMake(screen.size.width - 56, 40, 40, 40);
+}
+
+#pragma mark - menu card
+
+static const CGFloat kRowHeight = 46.0;
+
+@interface C18MenuCard : UIView
+@property (nonatomic, strong) UIVisualEffectView *blur;
+@property (nonatomic, strong) NSMutableArray<UIView *> *rows;
+- (void)layoutRows;
+@end
+
+@implementation C18MenuCard
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        self.backgroundColor = [UIColor clearColor];
+        self.layer.cornerRadius = 14;
+        self.layer.cornerCurve = kCACornerCurveContinuous;
+        self.clipsToBounds = YES;
+
+        UIBlurEffect *effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemChromeMaterial];
+        _blur = [[UIVisualEffectView alloc] initWithEffect:effect];
+        _blur.frame = self.bounds;
+        _blur.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [self addSubview:_blur];
+
+        _rows = [NSMutableArray array];
+    }
+    return self;
+}
+
+- (void)layoutRows {
+    CGFloat y = 0;
+    NSUInteger total = self.rows.count;
+    NSUInteger index = 0;
+    for (UIView *row in self.rows) {
+        row.frame = CGRectMake(0, y, self.bounds.size.width, kRowHeight);
+        y += kRowHeight;
+        BOOL last = (++index == total);
+        for (UIView *sub in row.subviews) {
+            if (sub.tag == 99) {
+                sub.frame = CGRectMake(last ? 0 : 16, kRowHeight - 0.5,
+                                       last ? 0 : self.bounds.size.width - 16, 0.5);
+                sub.hidden = last;
+            }
+        }
+    }
+}
+
+@end
+
+@interface C18MenuViewController : UIViewController
+@property (nonatomic, strong) C18MenuCard *card;
+@property (nonatomic, copy) void (^onDismiss)(void);
+@end
+
+@implementation C18MenuViewController
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor clearColor];
+
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(backgroundTapped)];
+    [self.view addGestureRecognizer:tap];
+}
+
+- (void)addRowWithTitle:(NSString *)title
+                 glyph:(NSString *)glyph
+           destructive:(BOOL)destructive
+                action:(C18PowerAction)action
+                  last:(BOOL)last {
+    UIView *row = [[UIView alloc] initWithFrame:CGRectZero];
+    row.backgroundColor = [UIColor clearColor];
+
+    UILabel *label = [[UILabel alloc] init];
+    label.text = title;
+    label.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+    label.textColor = destructive ? [UIColor systemRedColor] : [UIColor labelColor];
+    label.translatesAutoresizingMaskIntoConstraints = NO;
+    [row addSubview:label];
+
+    UIImageView *icon = [[UIImageView alloc] init];
+    UIImageConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold];
+    icon.image = [UIImage systemImageNamed:glyph withConfiguration:cfg];
+    icon.tintColor = destructive ? [UIColor systemRedColor] : [UIColor labelColor];
+    icon.contentMode = UIViewContentModeScaleAspectFit;
+    icon.translatesAutoresizingMaskIntoConstraints = NO;
+    [row addSubview:icon];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [label.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:16],
+        [label.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [icon.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-16],
+        [icon.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [icon.widthAnchor constraintEqualToConstant:24],
+        [icon.heightAnchor constraintEqualToConstant:24],
+    ]];
+
+    if (!last) {
+        UIView *separator = [[UIView alloc] initWithFrame:CGRectZero];
+        separator.tag = 99;
+        separator.backgroundColor = [UIColor separatorColor];
+        [row addSubview:separator];
+    }
+
+    UIButton *hit = [UIButton buttonWithType:UIButtonTypeCustom];
+    hit.backgroundColor = [UIColor clearColor];
+    hit.tag = action;
+    [hit addTarget:self action:@selector(rowTapped:) forControlEvents:UIControlEventTouchUpInside];
+    hit.translatesAutoresizingMaskIntoConstraints = NO;
+    [row addSubview:hit];
+    [NSLayoutConstraint activateConstraints:@[
+        [hit.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
+        [hit.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+        [hit.topAnchor constraintEqualToAnchor:row.topAnchor],
+        [hit.bottomAnchor constraintEqualToAnchor:row.bottomAnchor],
+    ]];
+
+    [self.card.rows addObject:row];
+    [self.card.blur.contentView addSubview:row];
+
+    if (destructive) {
+        UIView *stronger = [[UIView alloc] initWithFrame:CGRectZero];
+        stronger.userInteractionEnabled = NO;
+        stronger.backgroundColor = [UIColor colorWithWhite:1 alpha:0.06];
+        [row insertSubview:stronger atIndex:0];
+        stronger.translatesAutoresizingMaskIntoConstraints = NO;
+        [NSLayoutConstraint activateConstraints:@[
+            [stronger.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
+            [stronger.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+            [stronger.topAnchor constraintEqualToAnchor:row.topAnchor],
+            [stronger.bottomAnchor constraintEqualToAnchor:row.bottomAnchor],
+        ]];
+    }
+}
+
+- (void)rowTapped:(UIButton *)sender {
+    C18PowerAction action = (C18PowerAction)sender.tag;
+    void (^dismiss)(void) = self.onDismiss;
+    if (dismiss) dismiss();
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        C18RunAction(action);
+    });
+}
+
+- (void)backgroundTapped {
+    void (^dismiss)(void) = self.onDismiss;
+    if (dismiss) dismiss();
+}
+
+@end
+
+#pragma mark - presentation
+
+static UIWindow *g_menuWindow = nil;
+static C18MenuViewController *g_menuVC = nil;
+
+static void C18HideMenu(void) {
+    C18Log(@"hide menu");
+    g_menuWindow.rootViewController = nil;
+    g_menuWindow.hidden = YES;
+    g_menuWindow = nil;
+    g_menuVC = nil;
+}
+
+static UIWindowScene *C18Scene(void) {
+    for (UIWindow *w in [UIApplication sharedApplication].windows) {
+        if (w.isKeyWindow && w.windowScene) return w.windowScene;
+    }
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if ([scene isKindOfClass:[UIWindowScene class]]) return (UIWindowScene *)scene;
+    }
+    return nil;
+}
+
+static BOOL C18ShowMenu(void) {
+    UIWindowScene *scene = C18Scene();
+    if (!scene) {
+        C18Log(@"show menu: no scene");
         return NO;
     }
 
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        g_delegate = [C18MenuDelegate new];
-    });
+    if (g_menuWindow) C18HideMenu();
 
-    C18AnchorViewFor(overlay);
+    CGRect glyph = C18GlyphRect();
+    CGRect screen = scene.coordinateSpace.bounds;
+    C18Log(@"glyph=%.1f,%.1f,%.1f,%.1f screen=%.1fx%.1f",
+           glyph.origin.x, glyph.origin.y, glyph.size.width, glyph.size.height,
+           screen.size.width, screen.size.height);
 
-    // A reused interaction breaks on the second presentation (UIKit is still
-    // dismissing the previous one), so every press gets a fresh one.
-    if (g_interaction) {
-        [g_interaction.view removeInteraction:g_interaction];
-        g_interaction = nil;
-    }
-    g_interaction = [[UIContextMenuInteraction alloc] initWithDelegate:g_delegate];
-    [g_anchorView addInteraction:g_interaction];
+    C18MenuViewController *vc = [[C18MenuViewController alloc] init];
 
-    static NSArray<NSString *> *selectors = nil;
-    static dispatch_once_t selOnce;
-    dispatch_once(&selOnce, ^{
-        selectors = @[@"_presentMenuAtLocation:", @"_presentMenuAtLocation:animated:"];
-    });
+    UIVisualEffectView *backdrop = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
+    backdrop.frame = screen;
+    backdrop.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [vc.view addSubview:backdrop];
 
-    SEL presentSel = NULL;
-    for (NSString *name in selectors) {
-        SEL candidate = NSSelectorFromString(name);
-        if ([g_interaction respondsToSelector:candidate]) { presentSel = candidate; break; }
-    }
-    if (!presentSel) {
-        if (outReason) *outReason = @"no present selector";
-        return NO;
+    UIView *dim = [[UIView alloc] initWithFrame:screen];
+    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.18];
+    dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [vc.view addSubview:dim];
+
+    NSArray<NSDictionary *> *items = @[
+        @{@"t": @"快速注销", @"g": @"rays",                          @"a": @(C18PowerActionSoftRespring)},
+        @{@"t": @"强制注销", @"g": @"slowmo",                        @"a": @(C18PowerActionHardRespring)},
+        @{@"t": @"重启桌面", @"g": @"apps.iphone",                   @"a": @(C18PowerActionRestartDesktop)},
+        @{@"t": @"安全模式", @"g": @"shield.lefthalf.filled",        @"a": @(C18PowerActionSafeMode)},
+        @{@"t": @"重启空间", @"g": @"arrow.clockwise.circle",        @"a": @(C18PowerActionUserspaceReboot)},
+        @{@"t": @"重启设备", @"g": @"exclamationmark.arrow.circlepath", @"a": @(C18PowerActionReboot)},
+        @{@"t": @"设备关机", @"g": @"power",                          @"a": @(C18PowerActionShutdown)},
+    ];
+
+    CGFloat cardWidth = 268;
+    CGFloat cardHeight = kRowHeight * (items.count + 1);
+    CGFloat right = screen.size.width - 12;
+    CGFloat x = MIN(MAX(glyph.origin.x + glyph.size.width - cardWidth, 12), right - cardWidth);
+    CGFloat y = glyph.origin.y + glyph.size.height + 8;
+    if (y + cardHeight > screen.size.height - 40) {
+        y = MAX(glyph.origin.y - cardHeight - 8, 40);
     }
 
-    // Just under the glyph: the card opens downwards from the button.
-    CGPoint point = CGPointMake(CGRectGetMidX(g_anchorView.bounds), CGRectGetMaxY(g_anchorView.bounds) + 2);
-    {
-        CGRect glyph = C18GlyphRect(overlay);
-        NSString *log = [NSString stringWithFormat:@"glyph=%.1f,%.1f,%.1f,%.1f anchor=%.1f,%.1f point=%.1f,%.1f overlay=%.1fx%.1f\n",
-                         glyph.origin.x, glyph.origin.y, glyph.size.width, glyph.size.height,
-                         g_anchorView.frame.origin.x, g_anchorView.frame.origin.y,
-                         point.x, point.y,
-                         overlay.bounds.size.width, overlay.bounds.size.height];
-        [log writeToFile:@"/var/mobile/Library/C18PowerMenu-anchor.txt" atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    C18MenuCard *card = [[C18MenuCard alloc] initWithFrame:CGRectMake(x, y, cardWidth, cardHeight)];
+    vc.card = card;
+    [vc.view addSubview:card];
+
+    for (NSDictionary *item in items) {
+        [vc addRowWithTitle:item[@"t"] glyph:item[@"g"] destructive:NO
+                      action:(C18PowerAction)[item[@"a"] integerValue] last:NO];
     }
-    if (sel_isEqual(presentSel, NSSelectorFromString(@"_presentMenuAtLocation:animated:"))) {
-        ((void (*)(id, SEL, CGPoint, BOOL))objc_msgSend)(g_interaction, presentSel, point, YES);
-    } else {
-        ((void (*)(id, SEL, CGPoint))objc_msgSend)(g_interaction, presentSel, point);
-    }
-    if (outReason) *outReason = nil;
+    [vc addRowWithTitle:@"取消操作" glyph:@"trash" destructive:YES
+                  action:C18PowerActionCancel last:YES];
+    [card layoutRows];
+
+    __weak typeof(vc) weakVC = vc;
+    vc.onDismiss = ^{
+        (void)weakVC;
+        C18HideMenu();
+    };
+
+    UIWindow *window = [[UIWindow alloc] initWithWindowScene:scene];
+    window.windowLevel = UIWindowLevelAlert + 1;
+    window.backgroundColor = [UIColor clearColor];
+    window.rootViewController = vc;
+    window.hidden = NO;
+
+    g_menuWindow = window;
+    g_menuVC = vc;
+    C18Log(@"show menu at %.1f,%.1f size %.1fx%.1f", x, y, cardWidth, cardHeight);
     return YES;
 }
 
@@ -332,23 +463,16 @@ static void C18PowerMenuHook(id self, SEL cmd) {
         return;
     }
 
-    if (g_menuOpen) return;                                                        // already showing
-    if ([NSDate timeIntervalSinceReferenceDate] - g_menuClosedAt < 0.45) return;   // still animating out
-
-    NSString *reason = nil;
-    BOOL presented = NO;
+    BOOL shown = NO;
     @try {
-        presented = C18PresentMenu(&reason);
-    } @catch (__unused NSException *exception) {
-        presented = NO;
-        reason = @"exception";
-        if (g_interaction) {
-            [g_interaction.view removeInteraction:g_interaction];
-            g_interaction = nil;
-        }
+        shown = C18ShowMenu();
+    } @catch (NSException *exception) {
+        shown = NO;
+        C18Log(@"exception %@", exception);
     }
 
-    if (!presented && original) {
+    if (!shown && original) {
+        C18Log(@"fallback to stock");
         original(self, cmd);
     }
 }
@@ -386,41 +510,16 @@ static void C18InstallPowerHook(void) {
         g_orig[g_count] = (PresentIMP)original;
         g_count++;
         method_setImplementation(method, (IMP)C18PowerMenuHook);
+        C18Log(@"hooked %@", NSStringFromClass(cls));
     }
 
     free(classes);
 }
 
-#pragma mark - CC overlay hook
-
-static void (*g_origViewDidAppear)(id, SEL, BOOL) = NULL;
-
-static void C18ViewDidAppearHook(id self, SEL cmd, BOOL animated) {
-    if (g_origViewDidAppear) g_origViewDidAppear(self, cmd, animated);
-
-    if ([self isKindOfClass:[UIViewController class]]) {
-        g_overlayView = ((UIViewController *)self).view;
-    }
-}
-
-static void C18InstallOverlayHook(void) {
-    Class cls = NSClassFromString(@"CCUIModularControlCenterOverlayViewController");
-    if (!cls) return;
-
-    SEL sel = @selector(viewDidAppear:);
-    Method m = class_getInstanceMethod(cls, sel);
-    if (!m) return;
-
-    IMP orig = method_getImplementation(m);
-    if (orig == (IMP)C18ViewDidAppearHook) return;
-    g_origViewDidAppear = (void (*)(id, SEL, BOOL))orig;
-    method_setImplementation(m, (IMP)C18ViewDidAppearHook);
-}
-
 __attribute__((constructor)) static void C18PowerMenuInit(void) {
     @autoreleasepool {
+        C18Log(@"init");
         C18InstallPowerHook();
-        C18InstallOverlayHook();
 
         if (g_count == 0) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
