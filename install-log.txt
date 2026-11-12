@@ -9,9 +9,9 @@ ldid
 [34m==>[0m [1mWould install 1 dependency for ldid:[0m
 libplist
 [32m==>[0m [1mFetching downloads for: [32mldid[39m[0m
+✔︎ Bottle Manifest libplist (2.7.0)
 ✔︎ Bottle ldid (2.1.5_1)
 ✔︎ Bottle libplist (2.7.0)
-✔︎ Bottle Manifest libplist (2.7.0)
 [32m==>[0m [1mInstalling ldid dependency: [32mlibplist[39m[0m
 [34m==>[0m [1mPouring libplist--2.7.0.sonoma.bottle.tar.gz[0m
 🍺  /usr/local/Cellar/libplist/2.7.0: 32 files, 555.6KB
@@ -54,6 +54,6 @@ Submodule path 'vendor/templates': checked out '6c3944e281c4726f1383755d0fbb6428
   % Total    % Received % Xferd  Average Speed  Time    Time    Time   Current
                                  Dload  Upload  Total   Spent   Left   Speed
   0      0   0      0   0      0      0      0                              0  0      0   0      0   0      0      0      0                              0  0      0   0      0   0      0      0      0                              0
-  0      0   0      0   0      0      0      0                              0100 16.63M 100 16.63M   0      0 37.14M      0                              0100 16.63M 100 16.63M   0      0 37.13M      0                              0100 16.63M 100 16.63M   0      0 37.12M      0                              0
+  0      0   0      0   0      0      0      0                              0100 16.63M 100 16.63M   0      0 77.97M      0                              0100 16.63M 100 16.63M   0      0 77.91M      0                              0100 16.63M 100 16.63M   0      0 77.88M      0                              0
 + tar -xf /tmp/sdk.tar.xz -C /Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/sdks
 + test -d /Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/sdks/iPhoneOS16.5.sdk
