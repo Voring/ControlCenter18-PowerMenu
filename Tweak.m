@@ -2,11 +2,10 @@
 //
 // Menu is a plain UIMenu of UIActions (same as CCBorder's top actions button),
 // rendered by UIKit itself as a light rounded card: text left, SF symbol right,
-// with the system's own blurred backdrop. Long press on CC18's power glyph ends
-// up in presentPowerDownTransientOverlay, which we keep hooking. A
-// UIContextMenuInteraction then presents the card just under the glyph; only
-// when that really accepts the request do we drop the original call, otherwise
-// the stock power menu runs as before.
+// over its own blurred backdrop. Long press on CC18's power glyph ends up in
+// presentPowerDownTransientOverlay, which we keep hooking. A fresh
+// UIContextMenuInteraction presents the card right under that glyph; only when
+// it really accepts the request do we drop the original call.
 
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -154,13 +153,28 @@ static UIMenu *C18BuildMenu(void) {
 
 #pragma mark - context menu
 
-// UIContextMenuInteraction renders UIMenu exactly like the card in the target
-// screenshot: text on the left, SF symbol on the right, light rounded card,
-// over the system's own blurred backdrop.
+// UIContextMenuInteraction renders UIMenu exactly like a system card: text on
+// the left, SF symbol on the right, over its own blurred backdrop.
+static BOOL g_menuOpen = NO;
+static NSTimeInterval g_menuClosedAt = 0;
+
 @interface C18MenuDelegate : NSObject <UIContextMenuInteractionDelegate>
 @end
 
 @implementation C18MenuDelegate
+
+- (void)contextMenuInteraction:(UIContextMenuInteraction *)interaction
+   willDisplayMenuForConfiguration:(UIContextMenuConfiguration *)configuration
+                       animator:(id<UIContextMenuInteractionAnimating>)animator {
+    g_menuOpen = YES;
+}
+
+- (void)contextMenuInteraction:(UIContextMenuInteraction *)interaction
+      willEndForConfiguration:(UIContextMenuConfiguration *)configuration
+                       animator:(id<UIContextMenuInteractionAnimating>)animator {
+    g_menuOpen = NO;
+    g_menuClosedAt = [NSDate timeIntervalSinceReferenceDate];
+}
 
 - (UIContextMenuConfiguration *)contextMenuInteraction:(UIContextMenuInteraction *)interaction
                         configurationForMenuAtLocation:(CGPoint)location {
@@ -175,46 +189,52 @@ static UIMenu *C18BuildMenu(void) {
 
 static C18MenuDelegate *g_delegate = nil;
 static UIContextMenuInteraction *g_interaction = nil;
+static UIView *g_anchorView = nil;
 
-// Smallest interactive view living in the top-right corner of the CC overlay:
-// that is CC18's power glyph, whatever its class is called.
-static UIView *C18TopRightCandidate(UIView *view, UIView *root) {
-    UIView *best = nil;
-    CGSize bestArea = CGSizeZero;
+// CC18 draws its power icon in a small view whose class name mentions "power"
+// (C18PowerGlyphView and friends). Look that view up directly instead of
+// guessing from the left edge, which also keeps it correct in landscape.
+static UIView *C18FindPowerView(UIView *view) {
+    NSString *cls = NSStringFromClass([view class]).lowercaseString;
+    BOOL nameHit = [cls containsString:@"c18power"] || [cls containsString:@"powerglyph"] || [cls containsString:@"power"];
 
-    for (UIView *sub in view.subviews) {
-        CGRect f = [sub convertRect:sub.bounds toView:root];
-        if (sub.isUserInteractionEnabled && !sub.hidden && sub.alpha > 0.01) {
-            CGSize s = f.size;
-            BOOL sizeOK = s.width >= 20 && s.width <= 90 && s.height >= 20 && s.height <= 90;
-            BOOL placeOK = f.origin.x > root.bounds.size.width * 0.65 && f.origin.y < root.bounds.size.height * 0.3;
-            if (sizeOK && placeOK) {
-                if (!best || s.width * s.height < bestArea.width * bestArea.height) {
-                    best = sub;
-                    bestArea = s;
-                }
-            }
-        }
-        UIView *deep = C18TopRightCandidate(sub, root);
-        if (deep) {
-            CGRect df = [deep convertRect:deep.bounds toView:root];
-            if (!best || df.size.width * df.size.height < bestArea.width * bestArea.height) {
-                best = deep;
-                bestArea = df.size;
-            }
-        }
+    if (nameHit && view.window) {
+        CGSize s = view.bounds.size;
+        if (s.width >= 14 && s.width <= 100 && s.height >= 14 && s.height <= 100) return view;
     }
-    return best;
+    for (UIView *sub in view.subviews) {
+        UIView *hit = C18FindPowerView(sub);
+        if (hit) return hit;
+    }
+    return nil;
 }
 
-static CGPoint C18AnchorPoint(UIView *overlay) {
-    UIView *candidate = C18TopRightCandidate(overlay, overlay);
-    if (candidate) {
-        // Just under the glyph, so the card opens downwards from the button.
-        CGRect f = [candidate convertRect:candidate.bounds toView:overlay];
-        return CGPointMake(CGRectGetMidX(f), CGRectGetMaxY(f) + 6);
+static CGRect C18GlyphRect(UIView *overlay) {
+    UIView *power = C18FindPowerView(overlay);
+    if (power) return [power convertRect:power.bounds toView:overlay];
+
+    // Fallback: anchored to the top trailing corner, so landscape stays right.
+    CGFloat top = overlay.safeAreaInsets.top;
+    if (top <= 0 && overlay.window) top = overlay.window.safeAreaInsets.top;
+    CGFloat x = overlay.bounds.size.width - 64;
+    CGFloat y = MAX(top, 8) + 6;
+    return CGRectMake(x, y, 40, 40);
+}
+
+static void C18AnchorViewFor(UIView *overlay) {
+    CGRect glyph = C18GlyphRect(overlay);
+    CGRect frame = CGRectInset(glyph, -8, -8);
+
+    if (!g_anchorView || g_anchorView.superview != overlay) {
+        [g_anchorView removeFromSuperview];
+        g_anchorView = [[UIView alloc] initWithFrame:frame];
+        g_anchorView.backgroundColor = [UIColor clearColor];
+        g_anchorView.userInteractionEnabled = NO;
+        g_anchorView.alpha = 0.01;
+        [overlay addSubview:g_anchorView];
+    } else {
+        g_anchorView.frame = frame;
     }
-    return CGPointMake(overlay.bounds.size.width - 44, 96);
 }
 
 static UIView *C18OverlayView(void) {
@@ -246,11 +266,16 @@ static BOOL C18PresentMenu(NSString **outReason) {
         g_delegate = [C18MenuDelegate new];
     });
 
-    if (!g_interaction || g_interaction.view != overlay) {
+    C18AnchorViewFor(overlay);
+
+    // A reused interaction breaks on the second presentation (UIKit is still
+    // dismissing the previous one), so every press gets a fresh one.
+    if (g_interaction) {
         [g_interaction.view removeInteraction:g_interaction];
-        g_interaction = [[UIContextMenuInteraction alloc] initWithDelegate:g_delegate];
-        [overlay addInteraction:g_interaction];
+        g_interaction = nil;
     }
+    g_interaction = [[UIContextMenuInteraction alloc] initWithDelegate:g_delegate];
+    [g_anchorView addInteraction:g_interaction];
 
     static NSArray<NSString *> *selectors = nil;
     static dispatch_once_t selOnce;
@@ -268,7 +293,17 @@ static BOOL C18PresentMenu(NSString **outReason) {
         return NO;
     }
 
-    CGPoint point = C18AnchorPoint(overlay);
+    // Just under the glyph: the card opens downwards from the button.
+    CGPoint point = CGPointMake(CGRectGetMidX(g_anchorView.bounds), CGRectGetMaxY(g_anchorView.bounds) + 2);
+    {
+        CGRect glyph = C18GlyphRect(overlay);
+        NSString *log = [NSString stringWithFormat:@"glyph=%.1f,%.1f,%.1f,%.1f anchor=%.1f,%.1f point=%.1f,%.1f overlay=%.1fx%.1f\n",
+                         glyph.origin.x, glyph.origin.y, glyph.size.width, glyph.size.height,
+                         g_anchorView.frame.origin.x, g_anchorView.frame.origin.y,
+                         point.x, point.y,
+                         overlay.bounds.size.width, overlay.bounds.size.height];
+        [log writeToFile:@"/var/mobile/Library/C18PowerMenu-anchor.txt" atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    }
     if (sel_isEqual(presentSel, NSSelectorFromString(@"_presentMenuAtLocation:animated:"))) {
         ((void (*)(id, SEL, CGPoint, BOOL))objc_msgSend)(g_interaction, presentSel, point, YES);
     } else {
@@ -297,6 +332,9 @@ static void C18PowerMenuHook(id self, SEL cmd) {
         return;
     }
 
+    if (g_menuOpen) return;                                                        // already showing
+    if ([NSDate timeIntervalSinceReferenceDate] - g_menuClosedAt < 0.45) return;   // still animating out
+
     NSString *reason = nil;
     BOOL presented = NO;
     @try {
@@ -304,6 +342,10 @@ static void C18PowerMenuHook(id self, SEL cmd) {
     } @catch (__unused NSException *exception) {
         presented = NO;
         reason = @"exception";
+        if (g_interaction) {
+            [g_interaction.view removeInteraction:g_interaction];
+            g_interaction = nil;
+        }
     }
 
     if (!presented && original) {
