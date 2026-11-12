@@ -4,6 +4,10 @@ on:
   push:
   workflow_dispatch:
 
+concurrency:
+  group: c18-power-menu-build
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
@@ -19,15 +23,18 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          { date -u; uname -m; sw_vers; } > ci-probe.txt
+          { date -u; uname -m; sw_vers; echo THEOS_PLACEHOLDER; } | tee ci-probe.txt
           git add -f ci-probe.txt
           git commit -m "ci probe [skip ci]" || true
-          git push || true
+          git push origin HEAD:main || true
 
       - name: Install Theos (roothide) + iOS 16.5 SDK
         continue-on-error: true
         run: |
+          set -x
+          exec > >(tee install-log.txt) 2>&1
           brew install ldid xz
+          rm -rf "$GITHUB_WORKSPACE/theos"
           git clone --recursive --depth 1 https://github.com/roothide/theos.git "$GITHUB_WORKSPACE/theos"
           mkdir -p "$GITHUB_WORKSPACE/theos/sdks"
           SDK_URL=$(curl -sL https://api.github.com/repos/theos/sdks/releases/latest | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(a['browser_download_url'] for a in d['assets'] if a['name']=='iPhoneOS16.5.sdk.tar.xz'))")
@@ -41,27 +48,29 @@ jobs:
         env:
           THEOS: ${{ github.workspace }}/theos
         run: |
-          { make clean; make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide ARCHS=arm64e; } 2>&1 | tee build-log.txt
+          set -x
+          exec > >(tee build-log.txt) 2>&1
+          xcrun --sdk iphoneos --show-sdk-path || true
+          xcrun clang --version || true
+          make clean || true
+          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide ARCHS=arm64e
           ls -l packages || true
+          for f in packages/*.deb; do dpkg-deb -f "$f" Package Architecture Version Maintainer || true; done
 
-      - name: Commit build log
+      - name: Commit logs and deb
         if: always()
         run: |
-          touch build-log.txt
-          git add -f build-log.txt || true
-          if git diff --cached --quiet; then exit 0; fi
-          git commit -m "build log [skip ci]"
-          git pull --rebase || true
-          git push || true
-
-      - name: Commit deb
-        if: always()
-        run: |
-          ls packages/*.deb >/dev/null 2>&1 || exit 0
-          mkdir -p dist
-          cp packages/*.deb dist/
-          git add -f dist/*.deb
-          if git diff --cached --quiet; then exit 0; fi
-          git commit -m "deb build [skip ci]"
-          git pull --rebase || true
-          git push || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          touch install-log.txt build-log.txt
+          git add -f install-log.txt build-log.txt ci-probe.txt || true
+          if ls packages/*.deb >/dev/null 2>&1; then mkdir -p dist; cp packages/*.deb dist/; git add -f dist/*.deb; fi
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+          else
+            git commit -m "ci logs [skip ci]" || true
+            for i in 1 2 3; do
+              git pull --rebase origin main && git push origin HEAD:main && break || sleep 5
+            done
+          fi
+          git log --oneline -3
