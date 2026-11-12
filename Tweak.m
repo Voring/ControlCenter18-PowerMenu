@@ -1,11 +1,12 @@
 // C18PowerMenu - power menu for ControlCenter18 (iOS 16 / 17, roothide)
 //
-// Targets CC18's power glyph at the top-right corner of Control Center.
-// The long press still goes through presentPowerDownTransientOverlay, which we
-// hook and keep (that is the original trigger). Instead of drawing anything
-// ourselves, UIEditMenuInteraction asks UIKit to present a UIMenu of UIActions
-// at the glyph - same native look as CCBorder's actions button. When the menu
-// cannot be presented the stock power-down overlay runs as before.
+// Menu is a plain UIMenu of UIActions (same as CCBorder's top actions button),
+// rendered by UIKit itself as a light rounded card: text left, SF symbol right,
+// with the system's own blurred backdrop. Long press on CC18's power glyph ends
+// up in presentPowerDownTransientOverlay, which we keep hooking. A
+// UIContextMenuInteraction then presents the card just under the glyph; only
+// when that really accepts the request do we drop the original call, otherwise
+// the stock power menu runs as before.
 
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -151,26 +152,29 @@ static UIMenu *C18BuildMenu(void) {
     return [UIMenu menuWithTitle:@"" children:children];
 }
 
-#pragma mark - edit menu interaction
+#pragma mark - context menu
 
-// UIEditMenuInteraction is public since iOS 16 and renders the stock UIKit
-// menu at a given point, which is exactly what we need after the long press.
-API_AVAILABLE(ios(16.0))
-@interface C18MenuDelegate : NSObject <UIEditMenuInteractionDelegate>
+// UIContextMenuInteraction renders UIMenu exactly like the card in the target
+// screenshot: text on the left, SF symbol on the right, light rounded card,
+// over the system's own blurred backdrop.
+@interface C18MenuDelegate : NSObject <UIContextMenuInteractionDelegate>
 @end
 
 @implementation C18MenuDelegate
 
-- (UIMenu *)editMenuInteraction:(UIEditMenuInteraction *)interaction
-           menuForConfiguration:(UIEditMenuConfiguration *)configuration
-               suggestedActions:(NSArray<UIMenuElement *> *)suggestedActions API_AVAILABLE(ios(16.0)) {
-    return C18BuildMenu();
+- (UIContextMenuConfiguration *)contextMenuInteraction:(UIContextMenuInteraction *)interaction
+                        configurationForMenuAtLocation:(CGPoint)location {
+    return [UIContextMenuConfiguration configurationWithIdentifier:nil
+                                                   previewProvider:nil
+                                                    actionProvider:^UIMenu * _Nullable(NSArray<UIMenuElement *> *suggestedActions) {
+        return C18BuildMenu();
+    }];
 }
 
 @end
 
 static C18MenuDelegate *g_delegate = nil;
-static UIEditMenuInteraction *g_editInteraction = nil;
+static UIContextMenuInteraction *g_interaction = nil;
 
 // Smallest interactive view living in the top-right corner of the CC overlay:
 // that is CC18's power glyph, whatever its class is called.
@@ -206,9 +210,11 @@ static UIView *C18TopRightCandidate(UIView *view, UIView *root) {
 static CGPoint C18AnchorPoint(UIView *overlay) {
     UIView *candidate = C18TopRightCandidate(overlay, overlay);
     if (candidate) {
-        return [candidate convertPoint:candidate.center toView:overlay];
+        // Just under the glyph, so the card opens downwards from the button.
+        CGRect f = [candidate convertRect:candidate.bounds toView:overlay];
+        return CGPointMake(CGRectGetMidX(f), CGRectGetMaxY(f) + 6);
     }
-    return CGPointMake(overlay.bounds.size.width - 44, 44);
+    return CGPointMake(overlay.bounds.size.width - 44, 96);
 }
 
 static UIView *C18OverlayView(void) {
@@ -227,7 +233,7 @@ static UIView *C18OverlayView(void) {
     return nil;
 }
 
-// Returns YES only when the interaction accepted the presentation request.
+// Returns YES only when the interaction really presents the card menu.
 static BOOL C18PresentMenu(NSString **outReason) {
     UIView *overlay = C18OverlayView();
     if (!overlay) {
@@ -240,23 +246,36 @@ static BOOL C18PresentMenu(NSString **outReason) {
         g_delegate = [C18MenuDelegate new];
     });
 
-    if (@available(iOS 16.0, *)) {
-        if (!g_editInteraction || g_editInteraction.view != overlay) {
-            [g_editInteraction.view removeInteraction:g_editInteraction];
-            g_editInteraction = [[UIEditMenuInteraction alloc] initWithDelegate:g_delegate];
-            [overlay addInteraction:g_editInteraction];
-        }
-
-        CGPoint point = C18AnchorPoint(overlay);
-        UIEditMenuConfiguration *config = [UIEditMenuConfiguration configurationWithIdentifier:nil
-                                                                                   sourcePoint:point];
-        [g_editInteraction presentEditMenuWithConfiguration:config];
-        if (outReason) *outReason = nil;
-        return YES;
+    if (!g_interaction || g_interaction.view != overlay) {
+        [g_interaction.view removeInteraction:g_interaction];
+        g_interaction = [[UIContextMenuInteraction alloc] initWithDelegate:g_delegate];
+        [overlay addInteraction:g_interaction];
     }
 
-    if (outReason) *outReason = @"unavailable";
-    return NO;
+    static NSArray<NSString *> *selectors = nil;
+    static dispatch_once_t selOnce;
+    dispatch_once(&selOnce, ^{
+        selectors = @[@"_presentMenuAtLocation:", @"_presentMenuAtLocation:animated:"];
+    });
+
+    SEL presentSel = NULL;
+    for (NSString *name in selectors) {
+        SEL candidate = NSSelectorFromString(name);
+        if ([g_interaction respondsToSelector:candidate]) { presentSel = candidate; break; }
+    }
+    if (!presentSel) {
+        if (outReason) *outReason = @"no present selector";
+        return NO;
+    }
+
+    CGPoint point = C18AnchorPoint(overlay);
+    if (sel_isEqual(presentSel, NSSelectorFromString(@"_presentMenuAtLocation:animated:"))) {
+        ((void (*)(id, SEL, CGPoint, BOOL))objc_msgSend)(g_interaction, presentSel, point, YES);
+    } else {
+        ((void (*)(id, SEL, CGPoint))objc_msgSend)(g_interaction, presentSel, point);
+    }
+    if (outReason) *outReason = nil;
+    return YES;
 }
 
 #pragma mark - presentPowerDownTransientOverlay hook
