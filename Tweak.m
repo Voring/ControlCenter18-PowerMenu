@@ -1,6 +1,6 @@
 // C18PowerMenu - Power menu for ControlCenter18 (iOS 16 / 17, roothide)
-// ControlCenter18's power button only reacts to a long press, so this hook is the
-// long-press entry point: it shows CCRespring's own menu when installed, else ours.
+// ControlCenter18's power button only reacts to a long press; the hook below is
+// that long-press entry point and shows our own menu (no third-party controller).
 
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -26,7 +26,6 @@ static PresentIMP g_orig[16];
 static Class g_cls[16];
 static int g_count = 0;
 static BOOL g_presenting = NO;
-static UIWindow *g_fallbackWindow = nil;
 
 #pragma mark - Path helpers
 
@@ -71,9 +70,8 @@ static void C18Spawn(NSString *relative, NSArray<NSString *> *args) {
     posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
 
     pid_t pid = 0;
-    int rc = posix_spawn(&pid, path.UTF8String, &actions, NULL, (char *const *)argv, environ);
+    posix_spawn(&pid, path.UTF8String, &actions, NULL, (char *const *)argv, environ);
     posix_spawn_file_actions_destroy(&actions);
-    if (rc == 0 && pid > 0) waitpid(pid, NULL, WNOHANG);
 }
 
 static void C18RunAction(C18PowerAction action, PresentIMP original, id target, SEL cmd) {
@@ -86,6 +84,166 @@ static void C18RunAction(C18PowerAction action, PresentIMP original, id target, 
         case C18PowerActionUserspaceReboot: C18Spawn(@"/usr/bin/launchctl", @[@"reboot", @"userspace"]); break;
     }
 }
+
+#pragma mark - Menu model
+
+static NSArray<NSDictionary *> *C18MenuItems(void) {
+    return @[
+        @{@"title": @"注销",         @"glyph": @"power",                          @"action": @(C18PowerActionRespring)},
+        @{@"title": @"重启",         @"glyph": @"arrow.clockwise",                @"action": @(C18PowerActionReboot)},
+        @{@"title": @"关机",         @"glyph": @"power",                          @"action": @(C18PowerActionShutdown)},
+        @{@"title": @"安全模式",     @"glyph": @"exclamationmark.triangle",        @"action": @(C18PowerActionSafeMode)},
+        @{@"title": @"软重启设备",   @"glyph": @"arrow.triangle.2.circlepath",    @"action": @(C18PowerActionLdRestart)},
+        @{@"title": @"重启用户空间", @"glyph": @"arrow.uturn.left.circle",        @"action": @(C18PowerActionUserspaceReboot)},
+    ];
+}
+
+static UIImage *C18Glyph(NSString *name, CGFloat point) {
+    UIImageConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:point weight:UIImageSymbolWeightMedium];
+    UIImage *img = [UIImage systemImageNamed:name withConfiguration:cfg];
+    if (!img) img = [UIImage systemImageNamed:@"circle" withConfiguration:cfg];
+    return [img imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+}
+
+#pragma mark - Menu view controller (self drawn)
+
+@interface C18MenuViewController : UIViewController <UITableViewDataSource, UITableViewDelegate>
+@property (nonatomic, copy) NSArray<NSDictionary *> *items;
+@property (nonatomic, copy) void (^handler)(C18PowerAction);
+@property (nonatomic, strong) UIVisualEffectView *blur;
+@property (nonatomic, strong) UIView *card;
+@property (nonatomic, strong) UITableView *table;
+@end
+
+@implementation C18MenuViewController
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor clearColor];
+    self.modalPresentationStyle = UIModalPresentationOverFullScreen;
+    self.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+    self.items = C18MenuItems();
+
+    UIBlurEffect *effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleDark];
+    self.blur = [[UIVisualEffectView alloc] initWithEffect:effect];
+    self.blur.frame = self.view.bounds;
+    self.blur.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [self.view addSubview:self.blur];
+
+    UIView *dim = [[UIView alloc] initWithFrame:self.view.bounds];
+    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.28];
+    dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [self.view addSubview:dim];
+
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissSelf)];
+    [dim addGestureRecognizer:tap];
+
+    CGFloat cardWidth = MIN(CGRectGetWidth(self.view.bounds) - 44, 372);
+    CGFloat rowHeight = 56;
+    CGFloat headerHeight = 96;
+    CGFloat cardHeight = headerHeight + rowHeight * self.items.count;
+
+    self.card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, cardWidth, cardHeight)];
+    self.card.center = CGPointMake(CGRectGetMidX(self.view.bounds), CGRectGetMidY(self.view.bounds));
+    self.card.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin |
+                                 UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
+    self.card.backgroundColor = [UIColor colorWithWhite:0.08 alpha:0.72];
+    self.card.layer.cornerRadius = 36;
+    self.card.layer.cornerCurve = kCACornerCurveContinuous;
+    self.card.layer.masksToBounds = YES;
+    [self.view addSubview:self.card];
+
+    UIImageView *glyph = [[UIImageView alloc] initWithImage:C18Glyph(@"circle.dotted", 24)];
+    glyph.tintColor = [UIColor whiteColor];
+    glyph.contentMode = UIViewContentModeScaleAspectFit;
+    glyph.frame = CGRectMake(0, 22, cardWidth, 24);
+    glyph.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    [self.card addSubview:glyph];
+
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(0, 54, cardWidth, 26)];
+    title.text = @"电源";
+    title.font = [UIFont systemFontOfSize:20 weight:UIFontWeightBold];
+    title.textColor = [UIColor whiteColor];
+    title.textAlignment = NSTextAlignmentCenter;
+    title.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    [self.card addSubview:title];
+
+    UIView *hairline = [[UIView alloc] initWithFrame:CGRectMake(0, headerHeight - 0.5, cardWidth, 0.5)];
+    hairline.backgroundColor = [UIColor colorWithWhite:1 alpha:0.14];
+    hairline.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    [self.card addSubview:hairline];
+
+    self.table = [[UITableView alloc] initWithFrame:CGRectMake(0, headerHeight, cardWidth, rowHeight * self.items.count)
+                                                  style:UITableViewStylePlain];
+    self.table.backgroundColor = [UIColor clearColor];
+    self.table.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
+    self.table.separatorColor = [UIColor colorWithWhite:1 alpha:0.12];
+    self.table.separatorInset = UIEdgeInsetsZero;
+    self.table.scrollEnabled = NO;
+    self.table.dataSource = self;
+    self.table.delegate = self;
+    self.table.rowHeight = rowHeight;
+    self.table.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    [self.card addSubview:self.table];
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    self.blur.frame = self.view.bounds;
+    CGFloat cardWidth = MIN(CGRectGetWidth(self.view.bounds) - 44, 372);
+    CGFloat rowHeight = 56;
+    CGFloat headerHeight = 96;
+    CGRect f = self.card.frame;
+    f.size = CGSizeMake(cardWidth, headerHeight + rowHeight * self.items.count);
+    f.origin = CGPointMake((CGRectGetWidth(self.view.bounds) - f.size.width) / 2,
+                           (CGRectGetHeight(self.view.bounds) - f.size.height) / 2);
+    self.card.frame = f;
+    self.table.frame = CGRectMake(0, headerHeight, f.size.width, rowHeight * self.items.count);
+}
+
+- (void)dismissSelf {
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    return self.items.count;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    static NSString *cid = @"c18row";
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:cid];
+    if (!cell) {
+        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:cid];
+        cell.backgroundColor = [UIColor clearColor];
+        cell.contentView.backgroundColor = [UIColor clearColor];
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+        UIView *sel = [[UIView alloc] init];
+        sel.backgroundColor = [UIColor colorWithWhite:1 alpha:0.08];
+        cell.selectedBackgroundView = sel;
+        cell.textLabel.textColor = [UIColor whiteColor];
+        cell.textLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightMedium];
+        cell.imageView.tintColor = [UIColor whiteColor];
+    }
+    NSDictionary *item = self.items[indexPath.row];
+    cell.textLabel.text = item[@"title"];
+    cell.imageView.image = C18Glyph(item[@"glyph"], 22);
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    C18PowerAction action = (C18PowerAction)[self.items[indexPath.row][@"action"] integerValue];
+    void (^handler)(C18PowerAction) = self.handler;
+    [self dismissViewControllerAnimated:YES completion:^{
+        if (handler) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                handler(action);
+            });
+        }
+    }];
+}
+
+@end
 
 #pragma mark - Presentation helpers
 
@@ -106,106 +264,30 @@ static UIViewController *C18TopViewController(void) {
     return vc;
 }
 
-static UIViewController *C18FallbackViewController(void) {
-    if (g_fallbackWindow && g_fallbackWindow.rootViewController) return g_fallbackWindow.rootViewController;
-    g_fallbackWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-    g_fallbackWindow.windowLevel = UIWindowLevelAlert + 1;
-    UIViewController *root = [[UIViewController alloc] init];
-    root.view.backgroundColor = [UIColor clearColor];
-    g_fallbackWindow.rootViewController = root;
-    [g_fallbackWindow makeKeyAndVisible];
-    return root;
-}
-
-#pragma mark - CCRespring menu
-
-static Class C18RespringMenuClass(void) {
-    Class cls = NSClassFromString(@"CCRespringCCUIMenuModuleViewController");
-    if (cls) return cls;
-
-    NSString *bin = [C18JBRoot() stringByAppendingPathComponent:@"Library/ControlCenter/Bundles/CCRespring.bundle/CCRespring"];
-    if ([[NSFileManager defaultManager] fileExistsAtPath:bin]) {
-        dlopen(bin.UTF8String, RTLD_NOW);
-        cls = NSClassFromString(@"CCRespringCCUIMenuModuleViewController");
-    }
-    return cls;
-}
-
-static UIViewController *C18MakeRespringMenu(void) {
-    Class cls = C18RespringMenuClass();
-    if (!cls) return nil;
-
-    @try {
-        UIViewController *vc = [(UIViewController *)[cls alloc] init];
-        if (![vc isKindOfClass:[UIViewController class]]) return nil;
-        vc.modalPresentationStyle = UIModalPresentationOverFullScreen;
-        vc.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
-        return vc;
-    } @catch (__unused NSException *e) {
-        return nil;
-    }
-}
-
-#pragma mark - Our menu
-
-static void C18PresentAlert(UIViewController *host, id target, SEL cmd, PresentIMP original) {
-    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"电源"
-                                                                  message:nil
-                                                           preferredStyle:UIAlertControllerStyleAlert];
-
-    void (^add)(NSString *, C18PowerAction, UIAlertActionStyle) = ^(NSString *t, C18PowerAction a, UIAlertActionStyle s) {
-        [sheet addAction:[UIAlertAction actionWithTitle:t style:s handler:^(UIAlertAction *x) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                C18RunAction(a, original, target, cmd);
-            });
-        }]];
-    };
-
-    add(@"注销", C18PowerActionRespring, UIAlertActionStyleDefault);
-    add(@"重启", C18PowerActionReboot, UIAlertActionStyleDestructive);
-    add(@"关机", C18PowerActionShutdown, UIAlertActionStyleDestructive);
-    add(@"安全模式", C18PowerActionSafeMode, UIAlertActionStyleDestructive);
-    add(@"软重启设备", C18PowerActionLdRestart, UIAlertActionStyleDefault);
-    add(@"重启用户空间", C18PowerActionUserspaceReboot, UIAlertActionStyleDefault);
-
-    [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:^(UIAlertAction *x) {
-        g_presenting = NO;
-    }]];
-
-    [host presentViewController:sheet animated:YES completion:nil];
-}
-
 static void C18ShowPowerMenu(id target, SEL cmd, PresentIMP original) {
     if (g_presenting) return;
+    @try {
+        UIViewController *host = C18TopViewController();
 
-    UIViewController *host = C18TopViewController();
-    if (!host) host = C18FallbackViewController();
-    if (!host) {
-        if (original) original(target, cmd);
-        return;
-    }
+        C18MenuViewController *menu = [[C18MenuViewController alloc] init];
+        menu.handler = ^(C18PowerAction action) {
+            g_presenting = NO;
+            C18RunAction(action, original, target, cmd);
+        };
 
-    g_presenting = YES;
-
-    UIViewController *respring = C18MakeRespringMenu();
-    if (respring) {
-        [host presentViewController:respring animated:YES completion:^{
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                BOOL empty = (respring.view.window == nil || respring.view.subviews.count == 0);
-                if (empty) {
-                    [respring dismissViewControllerAnimated:NO completion:^{
-                        C18PresentAlert(host, target, cmd, original);
-                    }];
-                }
+        if (host) {
+            g_presenting = YES;
+            [host presentViewController:menu animated:YES completion:nil];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(20 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                g_presenting = NO;
             });
-        }];
-    } else {
-        C18PresentAlert(host, target, cmd, original);
-    }
-
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        } else if (original) {
+            original(target, cmd);
+        }
+    } @catch (__unused NSException *exception) {
         g_presenting = NO;
-    });
+        if (original) original(target, cmd);
+    }
 }
 
 #pragma mark - Hook
@@ -227,11 +309,7 @@ static void C18PowerMenuHook(id self, SEL cmd) {
         return;
     }
 
-    @try {
-        C18ShowPowerMenu(self, cmd, original);
-    } @catch (__unused NSException *exception) {
-        if (original) original(self, cmd);
-    }
+    C18ShowPowerMenu(self, cmd, original);
 }
 
 static BOOL C18ClassImplements(Class cls, SEL sel) {
