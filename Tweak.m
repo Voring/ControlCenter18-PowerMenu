@@ -1,6 +1,6 @@
 // C18PowerMenu - Power menu for ControlCenter18 (iOS 16 / 17, roothide)
-// Short press on the CC power button -> our native menu.
-// Long press -> CCRespring's own expanded menu, if it is installed.
+// ControlCenter18's power button only reacts to a long press, so this hook is the
+// long-press entry point: it shows CCRespring's own menu when installed, else ours.
 
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -27,8 +27,6 @@ static Class g_cls[16];
 static int g_count = 0;
 static BOOL g_presenting = NO;
 static UIWindow *g_fallbackWindow = nil;
-static CFAbsoluteTime g_suppressTapUntil = 0;
-static char kC18LongPressKey;
 
 #pragma mark - Path helpers
 
@@ -121,8 +119,6 @@ static UIViewController *C18FallbackViewController(void) {
 
 #pragma mark - CCRespring menu
 
-// CCRespring installs into the same jbroot; its class is only registered once the
-// bundle binary is loaded, so try NSClassFromString first and dlopen as a fallback.
 static Class C18RespringMenuClass(void) {
     Class cls = NSClassFromString(@"CCRespringCCUIMenuModuleViewController");
     if (cls) return cls;
@@ -150,7 +146,7 @@ static UIViewController *C18MakeRespringMenu(void) {
     }
 }
 
-#pragma mark - Menu
+#pragma mark - Our menu
 
 static void C18PresentAlert(UIViewController *host, id target, SEL cmd, PresentIMP original) {
     UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"电源"
@@ -190,38 +186,26 @@ static void C18ShowPowerMenu(id target, SEL cmd, PresentIMP original) {
     }
 
     g_presenting = YES;
-    C18PresentAlert(host, target, cmd, original);
+
+    UIViewController *respring = C18MakeRespringMenu();
+    if (respring) {
+        [host presentViewController:respring animated:YES completion:^{
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                BOOL empty = (respring.view.window == nil || respring.view.subviews.count == 0);
+                if (empty) {
+                    [respring dismissViewControllerAnimated:NO completion:^{
+                        C18PresentAlert(host, target, cmd, original);
+                    }];
+                }
+            });
+        }];
+    } else {
+        C18PresentAlert(host, target, cmd, original);
+    }
 
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         g_presenting = NO;
     });
-}
-
-// Long press: show CCRespring's own menu; if it is not installed, fall back to ours.
-static void C18ShowRespringMenu(id target, SEL cmd, PresentIMP original) {
-    if (g_presenting) return;
-
-    UIViewController *host = C18TopViewController();
-    if (!host) host = C18FallbackViewController();
-
-    UIViewController *menu = host ? C18MakeRespringMenu() : nil;
-    if (menu) {
-        g_presenting = YES;
-        g_suppressTapUntil = CFAbsoluteTimeGetCurrent() + 1.2;
-        [host presentViewController:menu animated:YES completion:^{
-            if (host.presentedViewController != menu) {
-                // CCRespring's module expects a CC container; fall back if it did not present.
-                g_presenting = NO;
-                C18PresentAlert(host, target, cmd, original);
-            }
-        }];
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            g_presenting = NO;
-        });
-        return;
-    }
-
-    C18ShowPowerMenu(target, cmd, original);
 }
 
 #pragma mark - Hook
@@ -236,11 +220,6 @@ static PresentIMP C18OriginalFor(id object) {
 static void C18PowerMenuHook(id self, SEL cmd) {
     PresentIMP original = C18OriginalFor(self);
 
-    if (CFAbsoluteTimeGetCurrent() < g_suppressTapUntil) {
-        // The long-press gesture already opened CCRespring's menu.
-        return;
-    }
-
     if (![NSThread isMainThread]) {
         dispatch_async(dispatch_get_main_queue(), ^{
             C18PowerMenuHook(self, cmd);
@@ -253,54 +232,6 @@ static void C18PowerMenuHook(id self, SEL cmd) {
     } @catch (__unused NSException *exception) {
         if (original) original(self, cmd);
     }
-}
-
-#pragma mark - Long press on the CC18 power glyph
-
-static void C18LongPressRecognized(id self, SEL _cmd, UILongPressGestureRecognizer *g) {
-    if (g.state != UIGestureRecognizerStateBegan) return;
-    g_suppressTapUntil = CFAbsoluteTimeGetCurrent() + 1.2;
-    C18ShowRespringMenu(nil, NULL, NULL);
-}
-
-static void C18DidMoveToWindowHook(id self, SEL cmd) {
-    VoidIMP orig = (VoidIMP)[self methodForSelector:@selector(c18_originalDidMoveToWindow)];
-    if (orig) orig(self, @selector(c18_originalDidMoveToWindow));
-
-    if (!objc_getAssociatedObject(self, &kC18LongPressKey)) {
-        UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(c18_longPress:)];
-        lp.minimumPressDuration = 0.55;
-        [(UIView *)self addGestureRecognizer:lp];
-        objc_setAssociatedObject(self, &kC18LongPressKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-}
-
-static void C18InstallGlyphGesture(void) {
-    int num = objc_getClassList(NULL, 0);
-    if (num <= 0) return;
-
-    Class *classes = (Class *)malloc(sizeof(Class) * num);
-    num = objc_getClassList(classes, num);
-
-    for (int i = 0; i < num; i++) {
-        const char *name = class_getName(classes[i]);
-        if (!name) continue;
-        if (!strstr(name, "C18PowerGlyph")) continue;
-        if (![(id)classes[i] isSubclassOfClass:[UIView class]]) continue;
-
-        SEL origSel = @selector(didMoveToWindow);
-        SEL swizSel = @selector(c18_originalDidMoveToWindow);
-        Method origM = class_getInstanceMethod(classes[i], origSel);
-        if (!origM) continue;
-        if (method_getImplementation(origM) == (IMP)C18DidMoveToWindowHook) continue;
-
-        class_addMethod(classes[i], swizSel, method_getImplementation(origM), method_getTypeEncoding(origM));
-        method_setImplementation(origM, (IMP)C18DidMoveToWindowHook);
-
-        class_addMethod(classes[i], @selector(c18_longPress:), (IMP)C18LongPressRecognized, "v@:@");
-    }
-
-    free(classes);
 }
 
 static BOOL C18ClassImplements(Class cls, SEL sel) {
@@ -344,12 +275,9 @@ static void C18InstallHooks(void) {
 __attribute__((constructor)) static void C18PowerMenuInit(void) {
     @autoreleasepool {
         C18InstallHooks();
-        C18InstallGlyphGesture();
-
         if (g_count == 0) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 if (g_count == 0) C18InstallHooks();
-                C18InstallGlyphGesture();
             });
         }
     }
