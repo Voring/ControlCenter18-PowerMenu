@@ -1,10 +1,10 @@
 // C18PowerMenu - power menu for ControlCenter18 (iOS 16 / 17, roothide)
 //
 // The long press on CC18's power glyph (top-right of Control Center) still ends
-// up in presentPowerDownTransientOverlay, which we hook. We show a card that
-// copies the system menu look - same blurred material, title on the left, SF
-// symbol on the right - pinned right under that glyph, with the power button
-// itself kept crisp as a floating circle in the same layer.
+// up in presentPowerDownTransientOverlay, which we hook. The card copies the
+// system menu look - same blurred material, title on the left, SF symbol on the
+// right - pinned right under that glyph. The overlay lives inside the existing
+// key window (a brand-new UIWindow in SpringBoard does not receive touches).
 
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -22,7 +22,7 @@ typedef void (*PresentIMP)(id, SEL);
 
 typedef NS_ENUM(NSInteger, C18PowerAction) {
     C18PowerActionSoftRespring = 0,   // 快速注销
-    C18PowerActionHardRespring,       // 强制注销 (reserved)
+    C18PowerActionHardRespring,       // 强制注销 (reserved, no row)
     C18PowerActionRestartDesktop,     // 重启桌面
     C18PowerActionSafeMode,           // 安全模式
     C18PowerActionUserspaceReboot,    // 重启空间
@@ -219,9 +219,20 @@ static CGRect C18GlyphRect(void) {
     return CGRectMake(screen.size.width - 56, 40, 40, 40);
 }
 
-#pragma mark - menu card
+#pragma mark - layout constants
 
 static const CGFloat kRowHeight = 46.0;
+
+// The card is exactly the system context-menu material (SystemChromeMaterial),
+// so it needs no tuning. Only the background is ours: the system context menu
+// blurs the background but keeps it readable - a 0.70 ultra-thin dark layer
+// plus a light 0.10 dim. Everything tunable lives here, one value per line.
+static const CGFloat kBackdropAlpha = 0.70;
+static const CGFloat kDimAlpha = 0.10;
+static const CGFloat kNudgeX = 11.5;   // half a row left, a quarter row back right
+static const CGFloat kNudgeY = 23.0;   // half a row down
+
+#pragma mark - menu card
 
 @interface C18MenuCard : UIView
 @property (nonatomic, strong) UIVisualEffectView *blur;
@@ -415,9 +426,9 @@ static BOOL C18ShowMenu(void) {
 
     CGRect glyph = C18GlyphRect();
     CGRect screen = host.bounds;
-    C18Log(@"glyph=%.1f,%.1f,%.1f,%.1f screen=%.1fx%.1f",
+    C18Log(@"glyph=%.1f,%.1f,%.1f,%.1f screen=%.1fx%.1f layerVars=%d",
            glyph.origin.x, glyph.origin.y, glyph.size.width, glyph.size.height,
-           screen.size.width, screen.size.height);
+           screen.size.width, screen.size.height, glyph.size.width == 40);
 
     C18MenuViewController *vc = [[C18MenuViewController alloc] init];
 
@@ -426,12 +437,12 @@ static BOOL C18ShowMenu(void) {
 
     UIVisualEffectView *backdrop = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
     backdrop.frame = screen;
-    backdrop.alpha = 0.94;
+    backdrop.alpha = kBackdropAlpha;
     backdrop.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [overlay addSubview:backdrop];
 
     UIView *dim = [[UIView alloc] initWithFrame:screen];
-    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.12];
+    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:kDimAlpha];
     dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:vc action:@selector(backgroundTapped)];
     [dim addGestureRecognizer:tap];
@@ -452,10 +463,8 @@ static BOOL C18ShowMenu(void) {
     CGFloat x = MIN(MAX(glyph.origin.x + glyph.size.width - cardWidth, 12), right - cardWidth);
     CGFloat y = glyph.origin.y + glyph.size.height + 8;
 
-    // Nudge: up half a row, left half a row, so the card reads as opening under
-    // the power button itself.
-    x -= 23;
-    y -= 23;
+    x -= kNudgeX;
+    y -= kNudgeY;
     if (x < 12) x = 12;
     if (y + cardHeight > screen.size.height - 40) {
         y = MAX(glyph.origin.y - cardHeight - 8, 40);
@@ -466,11 +475,12 @@ static BOOL C18ShowMenu(void) {
     vc.card = card;
     [overlay addSubview:card];
 
-    // The real glyph sits behind the blur; redraw it as a floating circle a
-    // little left of and below its own spot, using the card's own material.
+    // The real glyph sits behind the blur; redraw it as a floating circle at its
+    // own spot, nudged with the same offsets as the card so the two stay paired,
+    // using the card's own material.
     CGFloat side = MAX(34, MIN(glyph.size.width, 42));
-    UIView *circle = [[UIView alloc] initWithFrame:CGRectMake(CGRectGetMidX(glyph) - side / 2 - 23,
-                                                             CGRectGetMidY(glyph) - side / 2 - 23,
+    UIView *circle = [[UIView alloc] initWithFrame:CGRectMake(CGRectGetMidX(glyph) - side / 2 - kNudgeX,
+                                                             CGRectGetMidY(glyph) - side / 2 - kNudgeY,
                                                              side, side)];
     circle.backgroundColor = [UIColor clearColor];
     circle.layer.cornerRadius = side / 2;
@@ -529,7 +539,7 @@ static BOOL C18ShowMenu(void) {
         card.transform = CGAffineTransformIdentity;
         card.alpha = 1;
         circle.alpha = 1;
-        backdrop.alpha = 0.94;
+        backdrop.alpha = kBackdropAlpha;
         dim.alpha = 1;
     } completion:nil];
 
