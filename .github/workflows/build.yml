@@ -30,7 +30,9 @@ jobs:
           brew install ldid xz
           git clone --recursive --depth 1 https://github.com/theos/theos.git "$HOME/theos"
           mkdir -p "$HOME/theos/sdks"
-          curl -L --fail -o /tmp/sdk.tar.xz https://github.com/theos/sdks/releases/download/master/iPhoneOS16.5.sdk.tar.xz
+          SDK_URL=$(curl -sL https://api.github.com/repos/theos/sdks/releases/latest | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(a['browser_download_url'] for a in d['assets'] if a['name']=='iPhoneOS16.5.sdk.tar.xz'))")
+          echo "SDK: $SDK_URL"
+          curl -L --fail -o /tmp/sdk.tar.xz "$SDK_URL"
           tar -xf /tmp/sdk.tar.xz -C "$HOME/theos/sdks"
 
       - name: Build arm64e
