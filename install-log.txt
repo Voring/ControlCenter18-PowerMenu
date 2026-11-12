@@ -49,11 +49,13 @@ Submodule path 'vendor/orion/fishhook': checked out 'aadc161ac3b80db07a990885183
 Submodule path 'vendor/swift-support': checked out '4cf59ff04cdb2ceb27ea2228753e0497297b6182'
 Submodule path 'vendor/templates': checked out '6c3944e281c4726f1383755d0fbb642840312d28'
 + mkdir -p /Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/sdks
-++ curl -sL https://api.github.com/repos/theos/sdks/releases/latest
-++ python3 -c 'import sys,json;d=json.load(sys.stdin);print(next(a['\''browser_download_url'\''] for a in d['\''assets'\''] if a['\''name'\'']=='\''iPhoneOS16.5.sdk.tar.xz'\''))'
-Traceback (most recent call last):
-  File "<string>", line 1, in <module>
-    import sys,json;d=json.load(sys.stdin);print(next(a['browser_download_url'] for a in d['assets'] if a['name']=='iPhoneOS16.5.sdk.tar.xz'))
-                                                                                         ~^^^^^^^^^^
-KeyError: 'assets'
-+ SDK_URL=
++ SDK_URL=https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz
++ curl -L --fail -o /tmp/sdk.tar.xz https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz
+  % Total    % Received % Xferd  Average Speed  Time    Time    Time   Current
+                                 Dload  Upload  Total   Spent   Left   Speed
+  0      0   0      0   0      0      0      0                              0  0      0   0      0   0      0      0      0                              0  0      0   0      0   0      0      0      0                              0
+  0      0   0      0   0      0      0      0                              0100 16.63M 100 16.63M   0      0 14.14M      0   00:01   00:01              0100 16.63M 100 16.63M   0      0 14.14M      0   00:01   00:01              0100 16.63M 100 16.63M   0      0 14.14M      0   00:01   00:01              0
++ tar -xf /tmp/sdk.tar.xz -C /Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/sdks
++ ls /Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/sdks
+iPhoneOS16.5.sdk
++ test -d /Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/sdks/iPhoneOS16.5.sdk
