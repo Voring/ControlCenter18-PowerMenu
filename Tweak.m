@@ -1,5 +1,5 @@
 // C18PowerMenu - Power menu for ControlCenter18 (iOS 16 / 17, roothide)
-// Turns the Control Center power button into a native menu instead of shutting down.
+// Replaces the Control Center power button action with a native-looking menu.
 
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -12,6 +12,17 @@ extern char **environ;
 
 typedef void (*PresentIMP)(id, SEL);
 
+typedef NS_ENUM(NSInteger, C18PowerAction) {
+    C18PowerActionRespring = 0,
+    C18PowerActionReboot,
+    C18PowerActionShutdown,
+    C18PowerActionSafeMode,
+    C18PowerActionLdRestart,
+    C18PowerActionUserspaceReboot,
+};
+
+typedef void (*AddActionIMP)(id, SEL, NSString *, UIImage *, void (^)(void));
+
 static PresentIMP g_orig[16];
 static Class g_cls[16];
 static int g_count = 0;
@@ -20,8 +31,6 @@ static UIWindow *g_fallbackWindow = nil;
 
 #pragma mark - Path helpers
 
-// Resolve the jailbreak root without relying on libroothide: our own image
-// lives under <root>/Library/MobileSubstrate/DynamicLibraries/.
 static NSString *C18JBRoot(void) {
     static NSString *root = nil;
     static dispatch_once_t once;
@@ -30,12 +39,7 @@ static NSString *C18JBRoot(void) {
         if (dladdr((void *)&C18JBRoot, &info) && info.dli_fname) {
             NSString *path = [NSString stringWithUTF8String:info.dli_fname];
             NSRange r = [path rangeOfString:@"/Library/MobileSubstrate/DynamicLibraries/"];
-            if (r.location != NSNotFound) {
-                root = [path substringToIndex:r.location];
-            }
-        }
-        if (!root && [[NSFileManager defaultManager] fileExistsAtPath:@"/var/jb/usr/bin/killall"]) {
-            root = @"/var/jb";
+            if (r.location != NSNotFound) root = [path substringToIndex:r.location];
         }
         if (!root) root = @"/var/jb";
     });
@@ -70,52 +74,25 @@ static void C18Spawn(NSString *relative, NSArray<NSString *> *args) {
     pid_t pid = 0;
     int rc = posix_spawn(&pid, path.UTF8String, &actions, NULL, (char *const *)argv, environ);
     posix_spawn_file_actions_destroy(&actions);
-
-    if (rc == 0 && pid > 0) {
-        waitpid(pid, NULL, WNOHANG);
-    }
+    if (rc == 0 && pid > 0) waitpid(pid, NULL, WNOHANG);
 }
-
-#pragma mark - Actions
-
-typedef NS_ENUM(NSInteger, C18PowerAction) {
-    C18PowerActionRespring = 0,
-    C18PowerActionReboot,
-    C18PowerActionShutdown,
-    C18PowerActionSafeMode,
-    C18PowerActionLdRestart,
-    C18PowerActionUserspaceReboot,
-};
 
 static void C18RunAction(C18PowerAction action, PresentIMP original, id target, SEL cmd) {
     switch (action) {
-        case C18PowerActionRespring:
-            C18Spawn(@"/usr/bin/killall", @[@"-9", @"SpringBoard"]);
-            break;
-        case C18PowerActionReboot:
-            C18Spawn(@"/usr/bin/reboot", @[]);
-            break;
-        case C18PowerActionShutdown:
-            if (original) original(target, cmd);
-            break;
-        case C18PowerActionSafeMode:
-            C18Spawn(@"/usr/bin/killall", @[@"-SEGV", @"SpringBoard"]);
-            break;
-        case C18PowerActionLdRestart:
-            C18Spawn(@"/usr/bin/ldrestart", @[]);
-            break;
-        case C18PowerActionUserspaceReboot:
-            C18Spawn(@"/usr/bin/launchctl", @[@"reboot", @"userspace"]);
-            break;
+        case C18PowerActionRespring:   C18Spawn(@"/usr/bin/killall", @[@"-9", @"SpringBoard"]); break;
+        case C18PowerActionReboot:     C18Spawn(@"/usr/bin/reboot", @[]); break;
+        case C18PowerActionShutdown:   if (original) original(target, cmd); break;
+        case C18PowerActionSafeMode:   C18Spawn(@"/usr/bin/killall", @[@"-SEGV", @"SpringBoard"]); break;
+        case C18PowerActionLdRestart:  C18Spawn(@"/usr/bin/ldrestart", @[]); break;
+        case C18PowerActionUserspaceReboot: C18Spawn(@"/usr/bin/launchctl", @[@"reboot", @"userspace"]); break;
     }
 }
 
-#pragma mark - Presentation
+#pragma mark - Presentation helpers
 
 static UIViewController *C18TopViewController(void) {
     UIApplication *app = [UIApplication sharedApplication];
     UIWindow *key = nil;
-
     for (UIWindow *w in app.windows) {
         if (w.isKeyWindow && w.rootViewController) { key = w; break; }
     }
@@ -125,16 +102,13 @@ static UIViewController *C18TopViewController(void) {
         }
     }
     if (!key) return nil;
-
     UIViewController *vc = key.rootViewController;
     while (vc.presentedViewController) vc = vc.presentedViewController;
     return vc;
 }
 
 static UIViewController *C18FallbackViewController(void) {
-    if (g_fallbackWindow && g_fallbackWindow.rootViewController) {
-        return g_fallbackWindow.rootViewController;
-    }
+    if (g_fallbackWindow && g_fallbackWindow.rootViewController) return g_fallbackWindow.rootViewController;
     g_fallbackWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
     g_fallbackWindow.windowLevel = UIWindowLevelAlert + 1;
     UIViewController *root = [[UIViewController alloc] init];
@@ -142,6 +116,91 @@ static UIViewController *C18FallbackViewController(void) {
     g_fallbackWindow.rootViewController = root;
     [g_fallbackWindow makeKeyAndVisible];
     return root;
+}
+
+static UIImage *C18Glyph(NSString *name) {
+    UIImage *img = [UIImage systemImageNamed:name];
+    if (!img) img = [UIImage systemImageNamed:@"circle"];
+    return [img imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+}
+
+#pragma mark - Native ControlCenterUIKit menu module
+
+static BOOL C18PresentNativeMenu(UIViewController *host, id target, SEL cmd, PresentIMP original) {
+    Class menuCls = NSClassFromString(@"CCUIMenuModuleViewController");
+    if (!menuCls) return NO;
+
+    NSArray<NSString *> *titles = @[@"注销", @"重启", @"关机", @"安全模式", @"软重启设备", @"重启用户空间"];
+    NSArray<NSString *> *symbols = @[@"arrow.triangle.2.circlepath", @"power", @"power.circle",
+                                     @"arrow.2.circlepath", @"circle.dotted", @"power.circle.fill"];
+    NSArray<NSNumber *> *actions = @[@(C18PowerActionRespring), @(C18PowerActionReboot),
+                                     @(C18PowerActionShutdown), @(C18PowerActionSafeMode),
+                                     @(C18PowerActionLdRestart), @(C18PowerActionUserspaceReboot)];
+
+    id menu = nil;
+    @try {
+        menu = [[menuCls alloc] init];
+        if (![menu respondsToSelector:@selector(addActionWithTitle:glyph:handler:)]) return NO;
+
+        [menu setValue:@"电源" forKey:@"title"];
+        if ([menu respondsToSelector:@selector(setGlyphImage:)]) {
+            [menu performSelector:@selector(setGlyphImage:) withObject:C18Glyph(@"circle.dotted")];
+        }
+        if ([menu respondsToSelector:@selector(setSelectedGlyphImage:)]) {
+            [menu performSelector:@selector(setSelectedGlyphImage:) withObject:C18Glyph(@"circle.dotted")];
+        }
+
+        SEL addSel = @selector(addActionWithTitle:glyph:handler:);
+        AddActionIMP add = (AddActionIMP)[menu methodForSelector:addSel];
+        if (!add) return NO;
+
+        for (NSUInteger i = 0; i < titles.count; i++) {
+            C18PowerAction action = (C18PowerAction)actions[i].integerValue;
+            UIImage *glyph = C18Glyph(symbols[i]);
+            add(menu, addSel, titles[i], glyph, ^{
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    C18RunAction(action, original, target, cmd);
+                });
+            });
+        }
+
+        UIViewController *vc = (UIViewController *)menu;
+        vc.modalPresentationStyle = UIModalPresentationOverFullScreen;
+        vc.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+        [host presentViewController:vc animated:YES completion:nil];
+        return YES;
+    } @catch (__unused NSException *e) {
+        return NO;
+    }
+}
+
+#pragma mark - Fallback alert
+
+static void C18PresentFallback(UIViewController *host, id target, SEL cmd, PresentIMP original) {
+    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"电源"
+                                                                  message:nil
+                                                           preferredStyle:UIAlertControllerStyleAlert];
+
+    void (^add)(NSString *, C18PowerAction, UIAlertActionStyle) = ^(NSString *t, C18PowerAction a, UIAlertActionStyle s) {
+        [sheet addAction:[UIAlertAction actionWithTitle:t style:s handler:^(UIAlertAction *x) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                C18RunAction(a, original, target, cmd);
+            });
+        }]];
+    };
+
+    add(@"注销", C18PowerActionRespring, UIAlertActionStyleDefault);
+    add(@"重启", C18PowerActionReboot, UIAlertActionStyleDestructive);
+    add(@"关机", C18PowerActionShutdown, UIAlertActionStyleDestructive);
+    add(@"安全模式", C18PowerActionSafeMode, UIAlertActionStyleDestructive);
+    add(@"软重启设备", C18PowerActionLdRestart, UIAlertActionStyleDefault);
+    add(@"重启用户空间", C18PowerActionUserspaceReboot, UIAlertActionStyleDefault);
+
+    [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:^(UIAlertAction *x) {
+        g_presenting = NO;
+    }]];
+
+    [host presentViewController:sheet animated:YES completion:nil];
 }
 
 static void C18ShowPowerMenu(id target, SEL cmd, PresentIMP original) {
@@ -156,34 +215,13 @@ static void C18ShowPowerMenu(id target, SEL cmd, PresentIMP original) {
 
     g_presenting = YES;
 
-    UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"电源"
-                                                                  message:@"ControlCenter18"
-                                                           preferredStyle:UIAlertControllerStyleAlert];
+    if (!C18PresentNativeMenu(host, target, cmd, original)) {
+        C18PresentFallback(host, target, cmd, original);
+    }
 
-    __weak id weakTarget = target;
-
-    void (^add)(NSString *, C18PowerAction, UIAlertActionStyle) =
-        ^(NSString *title, C18PowerAction action, UIAlertActionStyle style) {
-            [sheet addAction:[UIAlertAction actionWithTitle:title style:style handler:^(UIAlertAction *a) {
-                g_presenting = NO;
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                    C18RunAction(action, original, weakTarget, cmd);
-                });
-            }]];
-        };
-
-    add(@"注销", C18PowerActionRespring, UIAlertActionStyleDefault);
-    add(@"重启", C18PowerActionReboot, UIAlertActionStyleDestructive);
-    add(@"关机", C18PowerActionShutdown, UIAlertActionStyleDestructive);
-    add(@"安全模式", C18PowerActionSafeMode, UIAlertActionStyleDestructive);
-    add(@"软重启设备", C18PowerActionLdRestart, UIAlertActionStyleDefault);
-    add(@"重启用户空间", C18PowerActionUserspaceReboot, UIAlertActionStyleDefault);
-
-    [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:^(UIAlertAction *a) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         g_presenting = NO;
-    }]];
-
-    [host presentViewController:sheet animated:YES completion:nil];
+    });
 }
 
 #pragma mark - Hook
@@ -225,7 +263,6 @@ static BOOL C18ClassImplements(Class cls, SEL sel) {
 
 static void C18InstallHooks(void) {
     SEL sel = sel_registerName("presentPowerDownTransientOverlay");
-
     int num = objc_getClassList(NULL, 0);
     if (num <= 0) return;
 
@@ -245,7 +282,6 @@ static void C18InstallHooks(void) {
         g_cls[g_count] = cls;
         g_orig[g_count] = (PresentIMP)original;
         g_count++;
-
         method_setImplementation(method, (IMP)C18PowerMenuHook);
     }
 
@@ -255,8 +291,6 @@ static void C18InstallHooks(void) {
 __attribute__((constructor)) static void C18PowerMenuInit(void) {
     @autoreleasepool {
         C18InstallHooks();
-
-        // ControlCenter18 / SpringBoard bundles may register later; retry once.
         if (g_count == 0) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 if (g_count == 0) C18InstallHooks();
