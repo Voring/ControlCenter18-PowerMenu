@@ -1,10 +1,11 @@
 // C18PowerMenu - power menu for ControlCenter18 (iOS 16 / 17, roothide)
 //
-// Same approach as CCBorder's top actions button: a plain UIButton carrying a
-// UIMenu built from UIActions, with showsMenuAsPrimaryAction enabled. UIKit
-// renders the menu itself, anchored to the button, so there is no custom card
-// and no dimming overlay of our own. The presentPowerDownTransientOverlay hook
-// re-installs the button and fires its primary action on the CC long press.
+// Targets CC18's power glyph at the top-right corner of Control Center.
+// The long press still goes through presentPowerDownTransientOverlay, which we
+// hook and keep (that is the original trigger). Instead of drawing anything
+// ourselves, UIEditMenuInteraction asks UIKit to present a UIMenu of UIActions
+// at the glyph - same native look as CCBorder's actions button. When the menu
+// cannot be presented the stock power-down overlay runs as before.
 
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -31,7 +32,8 @@ typedef NS_ENUM(NSInteger, C18PowerAction) {
 static PresentIMP g_orig[16];
 static Class g_cls[16];
 static int g_count = 0;
-static UIButton *g_menuButton = nil;
+
+static __weak UIView *g_overlayView = nil;
 
 #pragma mark - jbroot / spawn
 
@@ -149,59 +151,112 @@ static UIMenu *C18BuildMenu(void) {
     return [UIMenu menuWithTitle:@"" children:children];
 }
 
-#pragma mark - power button overlay
+#pragma mark - edit menu interaction
 
-static char kC18MenuButtonKey;
+// UIEditMenuInteraction is public since iOS 16 and renders the stock UIKit
+// menu at a given point, which is exactly what we need after the long press.
+API_AVAILABLE(ios(16.0))
+@interface C18MenuDelegate : NSObject <UIEditMenuInteractionDelegate>
+@end
 
-static UIView *C18FindPowerView(UIView *view) {
-    NSString *lower = NSStringFromClass([view class]).lowercaseString;
-    BOOL looksLikePower = [lower containsString:@"power"] || [lower containsString:@"c18power"];
-    if (looksLikePower && view.window) {
-        CGSize s = view.bounds.size;
-        if (s.width >= 24 && s.height >= 24) return view;
-    }
+@implementation C18MenuDelegate
+
+- (UIMenu *)editMenuInteraction:(UIEditMenuInteraction *)interaction
+           menuForConfiguration:(UIEditMenuConfiguration *)configuration
+               suggestedActions:(NSArray<UIMenuElement *> *)suggestedActions API_AVAILABLE(ios(16.0)) {
+    return C18BuildMenu();
+}
+
+@end
+
+static C18MenuDelegate *g_delegate = nil;
+static UIEditMenuInteraction *g_editInteraction = nil;
+
+// Smallest interactive view living in the top-right corner of the CC overlay:
+// that is CC18's power glyph, whatever its class is called.
+static UIView *C18TopRightCandidate(UIView *view, UIView *root) {
+    UIView *best = nil;
+    CGSize bestArea = CGSizeZero;
+
     for (UIView *sub in view.subviews) {
-        UIView *hit = C18FindPowerView(sub);
-        if (hit) return hit;
+        CGRect f = [sub convertRect:sub.bounds toView:root];
+        if (sub.isUserInteractionEnabled && !sub.hidden && sub.alpha > 0.01) {
+            CGSize s = f.size;
+            BOOL sizeOK = s.width >= 20 && s.width <= 90 && s.height >= 20 && s.height <= 90;
+            BOOL placeOK = f.origin.x > root.bounds.size.width * 0.65 && f.origin.y < root.bounds.size.height * 0.3;
+            if (sizeOK && placeOK) {
+                if (!best || s.width * s.height < bestArea.width * bestArea.height) {
+                    best = sub;
+                    bestArea = s;
+                }
+            }
+        }
+        UIView *deep = C18TopRightCandidate(sub, root);
+        if (deep) {
+            CGRect df = [deep convertRect:deep.bounds toView:root];
+            if (!best || df.size.width * df.size.height < bestArea.width * bestArea.height) {
+                best = deep;
+                bestArea = df.size;
+            }
+        }
     }
-    return nil;
+    return best;
 }
 
-static UIView *C18RootForScan(void) {
+static CGPoint C18AnchorPoint(UIView *overlay) {
+    UIView *candidate = C18TopRightCandidate(overlay, overlay);
+    if (candidate) {
+        return [candidate convertPoint:candidate.center toView:overlay];
+    }
+    return CGPointMake(overlay.bounds.size.width - 44, 44);
+}
+
+static UIView *C18OverlayView(void) {
+    if (g_overlayView && g_overlayView.window) return g_overlayView;
+
+    Class cc = NSClassFromString(@"CCUIModularControlCenterOverlayViewController");
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
-        UIView *root = w.rootViewController.view;
-        if (!root) continue;
-        UIView *hit = C18FindPowerView(root);
-        if (hit) return hit;
+        id vc = w.rootViewController;
+        if (![vc isKindOfClass:cc]) continue;
+        UIView *view = ((UIViewController *)vc).view;
+        if (view.window) {
+            g_overlayView = view;
+            return view;
+        }
     }
     return nil;
 }
 
-static void C18InstallMenuButton(UIView *powerView) {
-    if (!powerView) return;
-    UIButton *existing = objc_getAssociatedObject(powerView, &kC18MenuButtonKey);
-    if (existing) { g_menuButton = existing; return; }
+// Returns YES only when the interaction accepted the presentation request.
+static BOOL C18PresentMenu(NSString **outReason) {
+    UIView *overlay = C18OverlayView();
+    if (!overlay) {
+        if (outReason) *outReason = @"no overlay";
+        return NO;
+    }
 
-    UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
-    button.frame = powerView.bounds;
-    button.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    button.backgroundColor = [UIColor clearColor];
-    button.menu = C18BuildMenu();
-    button.showsMenuAsPrimaryAction = YES;
-    button.accessibilityLabel = @"电源";
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        g_delegate = [C18MenuDelegate new];
+    });
 
-    [powerView addSubview:button];
-    objc_setAssociatedObject(powerView, &kC18MenuButtonKey, button, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    g_menuButton = button;
-}
+    if (@available(iOS 16.0, *)) {
+        if (!g_editInteraction || g_editInteraction.view != overlay) {
+            [g_editInteraction.view removeInteraction:g_editInteraction];
+            g_editInteraction = [[UIEditMenuInteraction alloc] initWithDelegate:g_delegate];
+            [overlay addInteraction:g_editInteraction];
+        }
 
-static void C18OpenMenu(void) {
-    if (!g_menuButton) C18InstallMenuButton(C18RootForScan());
-    if (!g_menuButton) return;
+        CGPoint point = C18AnchorPoint(overlay);
+        UIEditMenuConfiguration *config = [UIEditMenuConfiguration configurationWithIdentifier:nil
+                                                                                   sourcePoint:point];
+        [g_editInteraction presentEditMenuWithConfiguration:config];
+        if (outReason) *outReason = nil;
+        return YES;
+    }
 
-    // The button already carries the menu; fire its primary action so UIKit
-    // presents the system menu anchored to the power button.
-    [g_menuButton sendActionsForControlEvents:UIControlEventTouchUpInside];
+    if (outReason) *outReason = @"unavailable";
+    return NO;
 }
 
 #pragma mark - presentPowerDownTransientOverlay hook
@@ -223,10 +278,17 @@ static void C18PowerMenuHook(id self, SEL cmd) {
         return;
     }
 
+    NSString *reason = nil;
+    BOOL presented = NO;
     @try {
-        C18OpenMenu();
+        presented = C18PresentMenu(&reason);
     } @catch (__unused NSException *exception) {
-        if (original) original(self, cmd);
+        presented = NO;
+        reason = @"exception";
+    }
+
+    if (!presented && original) {
+        original(self, cmd);
     }
 }
 
@@ -268,16 +330,16 @@ static void C18InstallPowerHook(void) {
     free(classes);
 }
 
-#pragma mark - CC overlay hook (re-install button after CC appears)
+#pragma mark - CC overlay hook
 
 static void (*g_origViewDidAppear)(id, SEL, BOOL) = NULL;
 
 static void C18ViewDidAppearHook(id self, SEL cmd, BOOL animated) {
     if (g_origViewDidAppear) g_origViewDidAppear(self, cmd, animated);
 
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        C18InstallMenuButton(C18RootForScan());
-    });
+    if ([self isKindOfClass:[UIViewController class]]) {
+        g_overlayView = ((UIViewController *)self).view;
+    }
 }
 
 static void C18InstallOverlayHook(void) {
@@ -298,10 +360,6 @@ __attribute__((constructor)) static void C18PowerMenuInit(void) {
     @autoreleasepool {
         C18InstallPowerHook();
         C18InstallOverlayHook();
-
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            C18InstallMenuButton(C18RootForScan());
-        });
 
         if (g_count == 0) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{

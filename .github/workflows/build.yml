@@ -84,18 +84,22 @@ jobs:
           ls -l dist/*.deb || { echo "no deb, skip release"; exit 0; }
           DEB=$(ls -t dist/*.deb | head -1)
           cp "$DEB" /tmp/C18PowerMenu_roothide_arm64e.deb
-          TAG="v1.4.1"
+          TAG="v1.5.0"
           cat > /tmp/notes.md <<'NOTES'
-          C18 Power Menu 1.4.1（roothide / arm64e）
+          C18 Power Menu 1.5.0（roothide / arm64e）
 
-          修复 1.4.0 长按不弹菜单：保留 presentPowerDownTransientOverlay hook，长按触发后先把菜单按钮挂到电源图标上，再主动触发它的主操作，由 UIKit 弹出系统 UIMenu。
+          目标就是 ControlCenter18 控制中心右上角那颗电源图标。触发方式回到原来的 hook：长按电源图标后它自己会调用 presentPowerDownTransientOverlay，我们接管这个调用。
 
-          菜单仍为系统原生渲染：快速注销 / 强制注销 / 重启桌面 / 安全模式 / 重启空间 / 重启设备 / 设备关机 / 取消操作，无自绘卡片、无遮罩。
+          菜单不再由我们绘制，也不再有全屏蒙版：hook 里用系统公开的 UIEditMenuInteraction 在电源图标位置请求 UIKit 弹出 UIMenu（条目为 UIAction，右侧 SF 图标），风格与 CCBorder 一致。
+
+          只有菜单真正弹出来时才拦截系统关机浮层；如果弹不出来，会原样执行系统自带的关机浮层，不会出现“长按没任何反应”。
+
+          条目：快速注销 / 强制注销 / 重启桌面 / 安全模式 / 重启空间 / 重启设备 / 设备关机 / 取消操作。
           NOTES
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb --clobber
-            gh release edit "$TAG" --title "C18 Power Menu 1.4.1 (roothide / arm64e)" --notes-file /tmp/notes.md
+            gh release edit "$TAG" --title "C18 Power Menu 1.5.0 (roothide / arm64e)" --notes-file /tmp/notes.md
           else
             gh release create "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb \
-              --title "C18 Power Menu 1.4.1 (roothide / arm64e)" --notes-file /tmp/notes.md
+              --title "C18 Power Menu 1.5.0 (roothide / arm64e)" --notes-file /tmp/notes.md
           fi
