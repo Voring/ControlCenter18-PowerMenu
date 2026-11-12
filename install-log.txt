@@ -9,8 +9,8 @@ ldid
 [34m==>[0m [1mWould install 1 dependency for ldid:[0m
 libplist
 [32m==>[0m [1mFetching downloads for: [32mldid[39m[0m
-✔︎ Bottle ldid (2.1.5_1)
 ✔︎ Bottle Manifest libplist (2.7.0)
+✔︎ Bottle ldid (2.1.5_1)
 ✔︎ Bottle libplist (2.7.0)
 [32m==>[0m [1mInstalling ldid dependency: [32mlibplist[39m[0m
 [34m==>[0m [1mPouring libplist--2.7.0.sonoma.bottle.tar.gz[0m
@@ -58,7 +58,7 @@ SDK: https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5
   % Total    % Received % Xferd  Average Speed  Time    Time    Time   Current
                                  Dload  Upload  Total   Spent   Left   Speed
   0      0   0      0   0      0      0      0                              0  0      0   0      0   0      0      0      0                              0  0      0   0      0   0      0      0      0                              0
-  0      0   0      0   0      0      0      0                              0100 16.63M 100 16.63M   0      0 48.75M      0                              0100 16.63M 100 16.63M   0      0 48.73M      0                              0100 16.63M 100 16.63M   0      0 48.71M      0                              0
+  0      0   0      0   0      0      0      0                              0100 16.63M 100 16.63M   0      0 41.94M      0                              0100 16.63M 100 16.63M   0      0 41.92M      0                              0100 16.63M 100 16.63M   0      0 41.91M      0                              0
 + tar -xf /tmp/sdk.tar.xz -C /Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/sdks
 + ls /Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/sdks
 iPhoneOS16.5.sdk
