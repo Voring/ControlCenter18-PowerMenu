@@ -78,11 +78,11 @@ static void C18Spawn(NSString *relative, NSArray<NSString *> *args) {
 
 static void C18RunAction(C18PowerAction action, PresentIMP original, id target, SEL cmd) {
     switch (action) {
-        case C18PowerActionSoftRespring:  C18Spawn(@"/usr/bin/killall", @[@"SpringBoard"]); break;
+        case C18PowerActionSoftRespring:  C18Spawn(@"/usr/bin/sbreload", @[]); break;
         case C18PowerActionHardRespring:  C18Spawn(@"/usr/bin/killall", @[@"-9", @"SpringBoard"]); break;
-        case C18PowerActionRestartDesktop:C18Spawn(@"/usr/bin/ldrestart", @[]); break;
+        case C18PowerActionRestartDesktop:C18Spawn(@"/usr/bin/killall", @[@"SpringBoard"]); break;
         case C18PowerActionSafeMode:      C18Spawn(@"/usr/bin/killall", @[@"-SEGV", @"SpringBoard"]); break;
-        case C18PowerActionUserspaceReboot: C18Spawn(@"/usr/bin/launchctl", @[@"reboot", @"userspace"]); break;
+        case C18PowerActionUserspaceReboot: C18Spawn(@"/bin/launchctl", @[@"reboot", @"userspace"]); break;
         case C18PowerActionReboot:        C18Spawn(@"/usr/bin/reboot", @[]); break;
         case C18PowerActionShutdown:      if (original) original(target, cmd); break;
         case C18PowerActionCancel:        break;
@@ -122,8 +122,8 @@ static UIImage *C18Glyph(NSString *name, CGFloat point) {
 
 @implementation C18MenuViewController
 
-static const CGFloat kRowHeight = 58.0;
-static const CGFloat kSideInset = 18.0;
+static const CGFloat kRowHeight = 48.0;
+static const CGFloat kSideInset = 14.0;
 
 - (void)viewDidLoad {
     [super viewDidLoad];
@@ -146,12 +146,12 @@ static const CGFloat kSideInset = 18.0;
     [dim addGestureRecognizer:tap];
 
     NSArray<NSDictionary *> *items = C18MenuItems();
-    CGFloat cardWidth = MIN(CGRectGetWidth(self.view.bounds) * 0.66, 280);
+    CGFloat cardWidth = MIN(MAX(CGRectGetWidth(self.view.bounds) * 0.46, 210), 260);
     CGFloat cardHeight = kRowHeight * items.count;
 
     self.card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, cardWidth, cardHeight)];
     self.card.backgroundColor = [UIColor colorWithWhite:0.96 alpha:0.97];
-    self.card.layer.cornerRadius = 20;
+    self.card.layer.cornerRadius = 16;
     self.card.layer.cornerCurve = kCACornerCurveContinuous;
     self.card.layer.masksToBounds = YES;
     [self.view addSubview:self.card];
@@ -168,15 +168,15 @@ static const CGFloat kSideInset = 18.0;
 
         UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(kSideInset, 0, cardWidth - kSideInset * 2 - 34, kRowHeight)];
         label.text = item[@"title"];
-        label.font = [UIFont systemFontOfSize:19 weight:UIFontWeightBold];
+        label.font = [UIFont systemFontOfSize:18 weight:UIFontWeightBold];
         label.textColor = tint;
         label.autoresizingMask = UIViewAutoresizingFlexibleWidth;
         [row addSubview:label];
 
-        UIImageView *icon = [[UIImageView alloc] initWithImage:C18Glyph(item[@"glyph"], 20)];
+        UIImageView *icon = [[UIImageView alloc] initWithImage:C18Glyph(item[@"glyph"], 19)];
         icon.tintColor = tint;
         icon.contentMode = UIViewContentModeScaleAspectFit;
-        icon.frame = CGRectMake(cardWidth - kSideInset - 24, (kRowHeight - 26) / 2, 24, 26);
+        icon.frame = CGRectMake(cardWidth - kSideInset - 22, (kRowHeight - 26) / 2, 22, 26);
         icon.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
         [row addSubview:icon];
 
