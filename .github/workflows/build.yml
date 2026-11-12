@@ -26,6 +26,7 @@ jobs:
           { date -u; uname -m; sw_vers; } | tee ci-probe.txt
           git add -f ci-probe.txt
           git commit -m "ci probe [skip ci]" || true
+          git pull --rebase origin main || true
           git push origin HEAD:main || true
 
       - name: Install Theos (roothide) + iOS 16.5 SDK
@@ -84,21 +85,22 @@ jobs:
           ls -l dist/*.deb || { echo "no deb, skip release"; exit 0; }
           DEB=$(ls -t dist/*.deb | head -1)
           cp "$DEB" /tmp/C18PowerMenu_roothide_arm64e.deb
-          TAG="v1.7.3"
+          TAG="v1.7.4"
           cat > /tmp/notes.md <<'NOTES'
-          C18 Power Menu 1.7.3 (roothide / arm64e)
+          C18 Power Menu 1.7.4 (roothide / arm64e)
 
-          1. Actions still dead: SpringBoard's sandbox blocks posix_spawn of killall. Now signals are sent in-process - soft respring / restart desktop = SIGTERM, hard respring = SIGKILL, safe mode = SIGSEGV - backboardd relaunches SpringBoard so it always takes effect. Userspace reboot / reboot try FBSystemService private selectors first, then fall back to spawning (errno is logged).
-          2. Backdrop blur stronger: blur layer 0.75 -> 1.0, dim 0.12 -> 0.16.
-          3. Position: nudge changed from one row (46pt) to half a row (23pt), i.e. half a row lower.
-          4. Floating power button: a circular overlay with the power icon is drawn at the glyph's own position, in the same layer as the card, so it is no longer buried by the blur. Tapping it closes the menu.
+          1. Floating power button no longer overlaps the card: moved half a row left and one row up, and it now uses the same SystemChromeMaterial blur as the card with matching corner style.
+          2. Added pop-in animation: the card springs from 0.86 scale, backdrop and dim fade in together.
+          3. Text and icons slightly smaller (17 -> 16).
+          4. Blur / dim toned down by a quarter: backdrop 0.75, dim 0.12.
 
-          Log: /var/mobile/Library/C18PowerMenu.log (records kill signal and spawn errno).
+          Trigger and actions unchanged: SpringBoard gets SIGTERM / SIGKILL / SIGSEGV in-process; shutdown via SBLockScreenManager.
+          Log: /var/mobile/Library/C18PowerMenu.log
           NOTES
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb --clobber
-            gh release edit "$TAG" --title "C18 Power Menu 1.7.3 (roothide / arm64e)" --notes-file /tmp/notes.md
+            gh release edit "$TAG" --title "C18 Power Menu 1.7.4 (roothide / arm64e)" --notes-file /tmp/notes.md
           else
             gh release create "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb \
-              --title "C18 Power Menu 1.7.3 (roothide / arm64e)" --notes-file /tmp/notes.md
+              --title "C18 Power Menu 1.7.4 (roothide / arm64e)" --notes-file /tmp/notes.md
           fi
