@@ -18,257 +18,248 @@ static int g_count = 0;
 static BOOL g_presenting = NO;
 static UIWindow *g_fallbackWindow = nil;
 
-#pragma mark - Jailbreak root
+#pragma mark - Path helpers
 
-// Walk up from our own dylib path to the real jbroot, no libroothide needed.
-static NSString *C18JBROOT(void) {
+// Resolve the jailbreak root without relying on libroothide: our own image
+// lives under <root>/Library/MobileSubstrate/DynamicLibraries/.
+static NSString *C18JBRoot(void) {
     static NSString *root = nil;
-    if (root) return root;
-
-    Dl_info info;
-    if (dladdr((__bridge void *)self, &info) && info.dli_fname) {
-        NSString *path = [NSString stringWithUTF8String:info.dli_fname];
-        NSRange r = [path rangeOfString:@"/Library/MobileSubstrate/DynamicLibraries/"];
-        if (r.location != NSNotFound) {
-            root = [path substringToIndex:r.location];
-        } else {
-            r = [path rangeOfString:@"/Library/ControlCenter/Bundles/"];
-            if (r.location != NSNotFound) root = [path substringToIndex:r.location];
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Dl_info info;
+        if (dladdr((void *)&C18JBRoot, &info) && info.dli_fname) {
+            NSString *path = [NSString stringWithUTF8String:info.dli_fname];
+            NSRange r = [path rangeOfString:@"/Library/MobileSubstrate/DynamicLibraries/"];
+            if (r.location != NSNotFound) {
+                root = [path substringToIndex:r.location];
+            }
         }
-    }
-    if (root.length == 0) root = @"/var/jb";
+        if (!root && [[NSFileManager defaultManager] fileExistsAtPath:@"/var/jb/usr/bin/killall"]) {
+            root = @"/var/jb";
+        }
+        if (!root) root = @"/var/jb";
+    });
     return root;
 }
 
-static NSString *C18Tool(NSString *name) {
-    NSString *jb = C18JBROOT();
-    for (NSString *dir in @[@"/usr/bin", @"/bin", @"/usr/sbin", @"/sbin"]) {
-        NSString *p = [jb stringByAppendingPathComponent:[dir stringByAppendingPathComponent:name]];
-        if ([[NSFileManager defaultManager] fileExistsAtPath:p]) return p;
-    }
-    for (NSString *dir in @[@"/usr/bin", @"/bin", @"/usr/sbin", @"/sbin"]) {
-        NSString *p = [dir stringByAppendingPathComponent:name];
-        if ([[NSFileManager defaultManager] fileExistsAtPath:p]) return p;
-    }
-    return nil;
+static NSString *C18Tool(NSString *relative) {
+    NSString *full = [C18JBRoot() stringByAppendingPathComponent:relative];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:full]) return full;
+    return relative;
 }
 
-static void C18Run(NSArray<NSString *> *argv) {
-    if (argv.count == 0) return;
-    NSString *tool = C18Tool(argv[0]);
-    if (!tool) return;
+static void C18Spawn(NSString *relative, NSArray<NSString *> *args) {
+    NSString *path = C18Tool(relative);
+    if (!path) return;
 
-    NSMutableArray *args = [NSMutableArray arrayWithObject:tool];
-    for (NSUInteger i = 1; i < argv.count; i++) [args addObject:argv[i]];
-
-    char **argsC = (char **)calloc(args.count + 1, sizeof(char *));
-    for (NSUInteger i = 0; i < args.count; i++) argsC[i] = strdup(args[i].UTF8String);
+    const char *argv[16];
+    int i = 0;
+    argv[i++] = strdup(path.UTF8String);
+    for (NSString *arg in args) {
+        if (i >= 15) break;
+        argv[i++] = strdup(arg.UTF8String);
+    }
+    argv[i] = NULL;
 
     posix_spawn_file_actions_t actions;
     posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
     posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
     posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
-    posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
 
     pid_t pid = 0;
-    int rc = posix_spawn(&pid, tool.UTF8String, &actions, NULL, argsC, environ);
+    int rc = posix_spawn(&pid, path.UTF8String, &actions, NULL, (char *const *)argv, environ);
     posix_spawn_file_actions_destroy(&actions);
-    for (NSUInteger i = 0; i < args.count; i++) free(argsC[i]);
-    free(argsC);
-    if (rc != 0 || pid <= 0) return;
 
-    int status = 0;
-    for (int i = 0; i < 50; i++) {
-        pid_t r = waitpid(pid, &status, WNOHANG);
-        if (r == pid || r == -1) break;
-        usleep(100 * 1000);
+    if (rc == 0 && pid > 0) {
+        waitpid(pid, NULL, WNOHANG);
     }
 }
 
 #pragma mark - Actions
 
-static void C18DoLogout(void)     { C18Run(@[@"killall", @"-9", @"SpringBoard"]); }
-static void C18DoReboot(void)     { C18Run(@[@"reboot"]); }
-static void C18DoSafemode(void)   { C18Run(@[@"killall", @"-SEGV", @"SpringBoard"]); }
-static void C18DoLdrestart(void)  { C18Run(@[@"ldrestart"]); }
-static void C18DoUserspace(void)  { C18Run(@[@"launchctl", @"reboot", @"userspace"]); }
+typedef NS_ENUM(NSInteger, C18PowerAction) {
+    C18PowerActionRespring = 0,
+    C18PowerActionReboot,
+    C18PowerActionShutdown,
+    C18PowerActionSafeMode,
+    C18PowerActionLdRestart,
+    C18PowerActionUserspaceReboot,
+};
 
-#pragma mark - Menu
+static void C18RunAction(C18PowerAction action, PresentIMP original, id target, SEL cmd) {
+    switch (action) {
+        case C18PowerActionRespring:
+            C18Spawn(@"/usr/bin/killall", @[@"-9", @"SpringBoard"]);
+            break;
+        case C18PowerActionReboot:
+            C18Spawn(@"/usr/bin/reboot", @[]);
+            break;
+        case C18PowerActionShutdown:
+            if (original) original(target, cmd);
+            break;
+        case C18PowerActionSafeMode:
+            C18Spawn(@"/usr/bin/killall", @[@"-SEGV", @"SpringBoard"]);
+            break;
+        case C18PowerActionLdRestart:
+            C18Spawn(@"/usr/bin/ldrestart", @[]);
+            break;
+        case C18PowerActionUserspaceReboot:
+            C18Spawn(@"/usr/bin/launchctl", @[@"reboot", @"userspace"]);
+            break;
+    }
+}
+
+#pragma mark - Presentation
 
 static UIViewController *C18TopViewController(void) {
-    UIWindow *win = nil;
-    if (@available(iOS 13.0, *)) {
-        for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
-            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
-            UIWindowScene *ws = (UIWindowScene *)scene;
-            if (ws.activationState != UISceneActivationStateForegroundActive) continue;
-            for (UIWindow *w in ws.windows) {
-                if (w.isKeyWindow) { win = w; break; }
-            }
-            if (win) break;
+    UIApplication *app = [UIApplication sharedApplication];
+    UIWindow *key = nil;
+
+    for (UIWindow *w in app.windows) {
+        if (w.isKeyWindow && w.rootViewController) { key = w; break; }
+    }
+    if (!key) {
+        for (UIWindow *w in app.windows) {
+            if (w.rootViewController && !w.hidden) { key = w; break; }
         }
     }
-    if (!win) win = UIApplication.sharedApplication.keyWindow;
+    if (!key) return nil;
 
-    UIViewController *vc = win.rootViewController;
+    UIViewController *vc = key.rootViewController;
     while (vc.presentedViewController) vc = vc.presentedViewController;
     return vc;
 }
 
-static UIWindow *C18HostWindow(void) {
-    UIViewController *vc = C18TopViewController();
-    if (vc && vc.view.window) return vc.view.window;
-
-    if (!g_fallbackWindow) {
-        if (@available(iOS 13.0, *)) {
-            for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
-                if (![scene isKindOfClass:[UIWindowScene class]]) continue;
-                UIWindowScene *ws = (UIWindowScene *)scene;
-                if (ws.activationState != UISceneActivationStateForegroundActive) continue;
-                g_fallbackWindow = [[UIWindow alloc] initWithWindowScene:ws];
-                break;
-            }
-        }
-        if (!g_fallbackWindow) g_fallbackWindow = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
-        g_fallbackWindow.windowLevel = UIWindowLevelAlert + 1;
-        g_fallbackWindow.backgroundColor = UIColor.clearColor;
-        UIViewController *root = [[UIViewController alloc] init];
-        root.view.backgroundColor = UIColor.clearColor;
-        g_fallbackWindow.rootViewController = root;
-        g_fallbackWindow.hidden = NO;
+static UIViewController *C18FallbackViewController(void) {
+    if (g_fallbackWindow && g_fallbackWindow.rootViewController) {
+        return g_fallbackWindow.rootViewController;
     }
-    return g_fallbackWindow;
+    g_fallbackWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+    g_fallbackWindow.windowLevel = UIWindowLevelAlert + 1;
+    UIViewController *root = [[UIViewController alloc] init];
+    root.view.backgroundColor = [UIColor clearColor];
+    g_fallbackWindow.rootViewController = root;
+    [g_fallbackWindow makeKeyAndVisible];
+    return root;
 }
 
-static void C18PresentMenu(void) {
+static void C18ShowPowerMenu(id target, SEL cmd, PresentIMP original) {
     if (g_presenting) return;
 
     UIViewController *host = C18TopViewController();
+    if (!host) host = C18FallbackViewController();
     if (!host) {
-        host = C18HostWindow().rootViewController;
+        if (original) original(target, cmd);
+        return;
     }
-    if (!host) return;
 
     g_presenting = YES;
 
     UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"电源"
-                                                                  message:nil
+                                                                  message:@"ControlCenter18"
                                                            preferredStyle:UIAlertControllerStyleAlert];
 
-    [sheet addAction:[UIAlertAction actionWithTitle:@"注销"
-                                              style:UIAlertActionStyleDefault
-                                            handler:^(UIAlertAction *a) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            C18DoLogout();
-        });
-    }]];
+    __weak id weakTarget = target;
 
-    [sheet addAction:[UIAlertAction actionWithTitle:@"重启"
-                                              style:UIAlertActionStyleDestructive
-                                            handler:^(UIAlertAction *a) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            C18DoReboot();
-        });
-    }]];
+    void (^add)(NSString *, C18PowerAction, UIAlertActionStyle) =
+        ^(NSString *title, C18PowerAction action, UIAlertActionStyle style) {
+            [sheet addAction:[UIAlertAction actionWithTitle:title style:style handler:^(UIAlertAction *a) {
+                g_presenting = NO;
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    C18RunAction(action, original, weakTarget, cmd);
+                });
+            }]];
+        };
 
-    [sheet addAction:[UIAlertAction actionWithTitle:@"关机"
-                                              style:UIAlertActionStyleDestructive
-                                            handler:^(UIAlertAction *a) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            for (int i = 0; i < g_count; i++) {
-                if (g_orig[i]) { g_orig[i](nil, @selector(presentPowerDownTransientOverlay)); break; }
-            }
-        });
-    }]];
+    add(@"注销", C18PowerActionRespring, UIAlertActionStyleDefault);
+    add(@"重启", C18PowerActionReboot, UIAlertActionStyleDestructive);
+    add(@"关机", C18PowerActionShutdown, UIAlertActionStyleDestructive);
+    add(@"安全模式", C18PowerActionSafeMode, UIAlertActionStyleDestructive);
+    add(@"软重启设备", C18PowerActionLdRestart, UIAlertActionStyleDefault);
+    add(@"重启用户空间", C18PowerActionUserspaceReboot, UIAlertActionStyleDefault);
 
-    [sheet addAction:[UIAlertAction actionWithTitle:@"安全模式"
-                                              style:UIAlertActionStyleDestructive
-                                            handler:^(UIAlertAction *a) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            C18DoSafemode();
-        });
-    }]];
-
-    [sheet addAction:[UIAlertAction actionWithTitle:@"软重启设备"
-                                              style:UIAlertActionStyleDefault
-                                            handler:^(UIAlertAction *a) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            C18DoLdrestart();
-        });
-    }]];
-
-    [sheet addAction:[UIAlertAction actionWithTitle:@"重启用户空间"
-                                              style:UIAlertActionStyleDefault
-                                            handler:^(UIAlertAction *a) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            C18DoUserspace();
-        });
-    }]];
-
-    [sheet addAction:[UIAlertAction actionWithTitle:@"取消"
-                                              style:UIAlertActionStyleCancel
-                                            handler:^(UIAlertAction *a) {
+    [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:^(UIAlertAction *a) {
         g_presenting = NO;
     }]];
 
     [host presentViewController:sheet animated:YES completion:nil];
-
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(60 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (g_presenting && !sheet.presentingViewController) g_presenting = NO;
-    });
 }
 
 #pragma mark - Hook
 
-static void C18Hook(id self, SEL _cmd) {
+static PresentIMP C18OriginalFor(id object) {
+    for (int i = 0; i < g_count; i++) {
+        if ([object isKindOfClass:g_cls[i]]) return g_orig[i];
+    }
+    return NULL;
+}
+
+static void C18PowerMenuHook(id self, SEL cmd) {
+    PresentIMP original = C18OriginalFor(self);
+
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            C18PowerMenuHook(self, cmd);
+        });
+        return;
+    }
+
     @try {
-        C18PresentMenu();
-    } @catch (NSException *e) {
-        for (int i = 0; i < g_count; i++) {
-            if ([self isKindOfClass:g_cls[i]] && g_orig[i]) {
-                g_orig[i](self, _cmd);
-                return;
-            }
-        }
+        C18ShowPowerMenu(self, cmd, original);
+    } @catch (__unused NSException *exception) {
+        if (original) original(self, cmd);
     }
 }
 
-static void C18InstallHook(void) {
-    int numClasses = 0;
-    Class *classes = objc_copyClassList(&numClasses);
-    if (!classes) return;
-
-    for (int i = 0; i < numClasses && g_count < 16; i++) {
-        Class cls = classes[i];
-        SEL sel = @selector(presentPowerDownTransientOverlay);
-        Method m = class_getInstanceMethod(cls, sel);
-        if (!m) continue;
-        if (class_getMethodImplementation(cls, sel) == NULL) continue;
-
-        unsigned int count = 0;
-        Method *list = class_copyMethodList(cls, &count);
-        BOOL owns = NO;
-        for (unsigned int j = 0; j < count; j++) {
-            if (method_getName(list[j]) == sel) { owns = YES; break; }
-        }
-        free(list);
-        if (!owns) continue;
-
-        IMP orig = method_getImplementation(m);
-        method_setImplementation(m, (IMP)C18Hook);
-        g_orig[g_count] = (PresentIMP)orig;
-        g_cls[g_count] = cls;
-        g_count++;
+static BOOL C18ClassImplements(Class cls, SEL sel) {
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(cls, &count);
+    BOOL found = NO;
+    for (unsigned int i = 0; i < count; i++) {
+        if (method_getName(methods[i]) == sel) { found = YES; break; }
     }
+    free(methods);
+    return found;
+}
+
+static void C18InstallHooks(void) {
+    SEL sel = sel_registerName("presentPowerDownTransientOverlay");
+
+    int num = objc_getClassList(NULL, 0);
+    if (num <= 0) return;
+
+    Class *classes = (Class *)malloc(sizeof(Class) * num);
+    num = objc_getClassList(classes, num);
+
+    for (int i = 0; i < num && g_count < 16; i++) {
+        Class cls = classes[i];
+        if (!C18ClassImplements(cls, sel)) continue;
+
+        Method method = class_getInstanceMethod(cls, sel);
+        if (!method) continue;
+
+        IMP original = method_getImplementation(method);
+        if (original == (IMP)C18PowerMenuHook) continue;
+
+        g_cls[g_count] = cls;
+        g_orig[g_count] = (PresentIMP)original;
+        g_count++;
+
+        method_setImplementation(method, (IMP)C18PowerMenuHook);
+    }
+
     free(classes);
 }
 
-__attribute__((constructor)) static void C18Init(void) {
+__attribute__((constructor)) static void C18PowerMenuInit(void) {
     @autoreleasepool {
-        C18InstallHook();
+        C18InstallHooks();
+
+        // ControlCenter18 / SpringBoard bundles may register later; retry once.
         if (g_count == 0) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                C18InstallHook();
+                if (g_count == 0) C18InstallHooks();
             });
         }
     }
