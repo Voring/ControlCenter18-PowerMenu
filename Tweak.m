@@ -1,10 +1,11 @@
 // C18PowerMenu - power menu for ControlCenter18 (iOS 16 / 17, roothide)
 //
 // The long press on CC18's power glyph (top-right of Control Center) still ends
-// up in presentPowerDownTransientOverlay, which we hook. Instead of letting
-// UIKit place a menu wherever it likes, we show a card that copies the system
-// menu look - same blurred material, title on the left, SF symbol on the right
-// - and pin it right under that glyph.
+// up in presentPowerDownTransientOverlay, which we hook. We show a card that
+// copies the system menu look - same blurred material, title on the left, SF
+// symbol on the right - pinned right under that glyph. The card lives inside
+// the existing key window (a brand-new UIWindow in SpringBoard does not reliably
+// receive touches).
 
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -65,7 +66,6 @@ static NSString *C18JBRoot(void) {
     return root;
 }
 
-// roothide keeps its binaries under the jbroot; also accept the plain path.
 static NSArray<NSString *> *C18Candidates(NSString *relative) {
     NSString *full = [C18JBRoot() stringByAppendingPathComponent:relative];
     if ([full isEqualToString:relative]) return @[relative];
@@ -154,9 +154,6 @@ static void C18RunAction(C18PowerAction action) {
 
 #pragma mark - power glyph lookup
 
-// CC18 draws the power icon in a small view whose class name mentions "power"
-// (C18PowerGlyphView and friends). Look that view up directly instead of
-// guessing from the left edge, which also keeps it correct in landscape.
 static UIView *C18FindPowerView(UIView *view) {
     NSString *cls = NSStringFromClass([view class]).lowercaseString;
     BOOL nameHit = [cls containsString:@"c18power"] || [cls containsString:@"powerglyph"] || [cls containsString:@"power"];
@@ -182,7 +179,6 @@ static UIView *C18OverlayView(void) {
     return nil;
 }
 
-// Glyph frame in screen coordinates.
 static CGRect C18GlyphRect(void) {
     UIView *overlay = C18OverlayView();
     UIView *power = overlay ? C18FindPowerView(overlay) : nil;
@@ -263,6 +259,14 @@ static const CGFloat kRowHeight = 46.0;
     UIView *row = [[UIView alloc] initWithFrame:CGRectZero];
     row.backgroundColor = [UIColor clearColor];
 
+    UIView *highlight = [[UIView alloc] init];
+    highlight.tag = 777;
+    highlight.userInteractionEnabled = NO;
+    highlight.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
+    highlight.alpha = 0;
+    highlight.translatesAutoresizingMaskIntoConstraints = NO;
+    [row addSubview:highlight];
+
     UILabel *label = [[UILabel alloc] init];
     label.text = title;
     label.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
@@ -279,6 +283,10 @@ static const CGFloat kRowHeight = 46.0;
     [row addSubview:icon];
 
     [NSLayoutConstraint activateConstraints:@[
+        [highlight.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
+        [highlight.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+        [highlight.topAnchor constraintEqualToAnchor:row.topAnchor],
+        [highlight.bottomAnchor constraintEqualToAnchor:row.bottomAnchor],
         [label.leadingAnchor constraintEqualToAnchor:row.leadingAnchor constant:16],
         [label.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
         [icon.trailingAnchor constraintEqualToAnchor:row.trailingAnchor constant:-16],
@@ -297,7 +305,10 @@ static const CGFloat kRowHeight = 46.0;
     UIButton *hit = [UIButton buttonWithType:UIButtonTypeCustom];
     hit.backgroundColor = [UIColor clearColor];
     hit.tag = action;
+    [hit addTarget:self action:@selector(rowTouchDown:) forControlEvents:UIControlEventTouchDown];
     [hit addTarget:self action:@selector(rowTapped:) forControlEvents:UIControlEventTouchUpInside];
+    [hit addTarget:self action:@selector(rowTouchCancel:) forControlEvents:UIControlEventTouchUpOutside];
+    [hit addTarget:self action:@selector(rowTouchCancel:) forControlEvents:UIControlEventTouchCancel];
     hit.translatesAutoresizingMaskIntoConstraints = NO;
     [row addSubview:hit];
     [NSLayoutConstraint activateConstraints:@[
@@ -311,7 +322,20 @@ static const CGFloat kRowHeight = 46.0;
     [self.card.blur.contentView addSubview:row];
 }
 
+- (void)rowTouchDown:(UIButton *)sender {
+    UIView *hl = [sender.superview viewWithTag:777];
+    [UIView animateWithDuration:0.1 animations:^{ hl.alpha = 1; }];
+}
+
+- (void)rowTouchCancel:(UIButton *)sender {
+    UIView *hl = [sender.superview viewWithTag:777];
+    [UIView animateWithDuration:0.1 animations:^{ hl.alpha = 0; }];
+}
+
 - (void)rowTapped:(UIButton *)sender {
+    UIView *hl = [sender.superview viewWithTag:777];
+    [UIView animateWithDuration:0.1 animations:^{ hl.alpha = 0; }];
+
     C18PowerAction action = (C18PowerAction)sender.tag;
     void (^dismiss)(void) = self.onDismiss;
     if (dismiss) dismiss();
@@ -330,57 +354,57 @@ static const CGFloat kRowHeight = 46.0;
 
 #pragma mark - presentation
 
-static UIWindow *g_menuWindow = nil;
+static UIView *g_overlay = nil;
 static C18MenuViewController *g_menuVC = nil;
 
 static void C18HideMenu(void) {
     C18Log(@"hide menu");
-    [g_menuWindow resignKeyWindow];
-    g_menuWindow.rootViewController = nil;
-    g_menuWindow.hidden = YES;
-    g_menuWindow = nil;
+    [g_overlay removeFromSuperview];
+    g_overlay = nil;
     g_menuVC = nil;
 }
 
-static UIWindowScene *C18Scene(void) {
+static UIWindow *C18HostWindow(void) {
+    UIWindow *key = [UIApplication sharedApplication].keyWindow;
+    if (key) return key;
     for (UIWindow *w in [UIApplication sharedApplication].windows) {
-        if (w.isKeyWindow && w.windowScene) return w.windowScene;
-    }
-    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-        if ([scene isKindOfClass:[UIWindowScene class]]) return (UIWindowScene *)scene;
+        if (w.windowScene) return w;
     }
     return nil;
 }
 
 static BOOL C18ShowMenu(void) {
-    UIWindowScene *scene = C18Scene();
-    if (!scene) {
-        C18Log(@"show menu: no scene");
+    UIWindow *host = C18HostWindow();
+    if (!host) {
+        C18Log(@"show menu: no host window");
         return NO;
     }
 
-    if (g_menuWindow) C18HideMenu();
+    if (g_overlay) C18HideMenu();
 
     CGRect glyph = C18GlyphRect();
-    CGRect screen = scene.coordinateSpace.bounds;
+    CGRect screen = host.bounds;
     C18Log(@"glyph=%.1f,%.1f,%.1f,%.1f screen=%.1fx%.1f",
            glyph.origin.x, glyph.origin.y, glyph.size.width, glyph.size.height,
            screen.size.width, screen.size.height);
 
     C18MenuViewController *vc = [[C18MenuViewController alloc] init];
 
+    UIView *overlay = [[UIView alloc] initWithFrame:screen];
+    overlay.backgroundColor = [UIColor clearColor];
+
     UIVisualEffectView *backdrop = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
     backdrop.frame = screen;
-    backdrop.alpha = 0.5;
+    backdrop.alpha = 0.75;
     backdrop.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    [vc.view addSubview:backdrop];
+    [overlay addSubview:backdrop];
 
     UIView *dim = [[UIView alloc] initWithFrame:screen];
-    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.07];
+    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.12];
     dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:vc action:@selector(backgroundTapped)];
     [dim addGestureRecognizer:tap];
-    [vc.view addSubview:dim];
+    [overlay addSubview:dim];
 
     NSArray<NSDictionary *> *items = @[
         @{@"t": @"快速注销", @"g": @"rays",                          @"a": @(C18PowerActionSoftRespring)},
@@ -393,17 +417,24 @@ static BOOL C18ShowMenu(void) {
     ];
 
     CGFloat cardWidth = 200;
-    CGFloat cardHeight = kRowHeight * (items.count + 1) + 12;
+    CGFloat cardHeight = kRowHeight * (items.count + 1);
     CGFloat right = screen.size.width - 12;
     CGFloat x = MIN(MAX(glyph.origin.x + glyph.size.width - cardWidth, 12), right - cardWidth);
     CGFloat y = glyph.origin.y + glyph.size.height + 8;
+
+    // Nudge: up one row, left half a row, so the card reads as opening under
+    // the power button itself.
+    x -= 23;
+    y -= 46;
+    if (x < 12) x = 12;
     if (y + cardHeight > screen.size.height - 40) {
         y = MAX(glyph.origin.y - cardHeight - 8, 40);
     }
+    if (y < 40) y = 40;
 
     C18MenuCard *card = [[C18MenuCard alloc] initWithFrame:CGRectMake(x, y, cardWidth, cardHeight)];
     vc.card = card;
-    [vc.view addSubview:card];
+    [overlay addSubview:card];
 
     for (NSDictionary *item in items) {
         [vc addRowWithTitle:item[@"t"] glyph:item[@"g"] destructive:NO
@@ -419,14 +450,9 @@ static BOOL C18ShowMenu(void) {
         C18HideMenu();
     };
 
-    UIWindow *window = [[UIWindow alloc] initWithWindowScene:scene];
-    window.windowLevel = UIWindowLevelAlert + 1;
-    window.backgroundColor = [UIColor clearColor];
-    window.rootViewController = vc;
-    window.hidden = NO;
-    [window makeKeyWindow];
-
-    g_menuWindow = window;
+    [host addSubview:overlay];
+    [host bringSubviewToFront:overlay];
+    g_overlay = overlay;
     g_menuVC = vc;
     C18Log(@"show menu at %.1f,%.1f size %.1fx%.1f", x, y, cardWidth, cardHeight);
     return YES;
