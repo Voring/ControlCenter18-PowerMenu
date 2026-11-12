@@ -84,21 +84,22 @@ jobs:
           ls -l dist/*.deb || { echo "no deb, skip release"; exit 0; }
           DEB=$(ls -t dist/*.deb | head -1)
           cp "$DEB" /tmp/C18PowerMenu_roothide_arm64e.deb
-          TAG="v1.7.1"
+          TAG="v1.7.2"
           cat > /tmp/notes.md <<'NOTES'
-          C18 Power Menu 1.7.1（roothide / arm64e）
+          C18 Power Menu 1.7.2（roothide / arm64e）
 
           修复：
-          1. 条目点不动：菜单窗口没有成为 key window，触摸事件没路由进来；现弹出后 makeKeyWindow，关闭时 resignKeyWindow。取消行之前那层默认深色底已去掉。
-          2. 背景高斯模糊减半：全屏模糊层透明度 0.5，压暗层 0.18 -> 0.07，只保留轻微模糊。
-          3. 卡片宽度 268 -> 200（约缩 1/4）。
+          1. 条目点不动、无反馈：不再新建 UIWindow（SpringBoard 里新窗口收不到触摸），改为把遮罩直接挂到现有 key window 上；每行加按下变深、松开恢复的高亮反馈。
+          2. 背景模糊再加一半：模糊层透明度 0.5 -> 0.75，压暗层 0.07 -> 0.12。
+          3. 位置：卡片整体上移一行（46pt）、左移半行（23pt），看起来是从电源按钮下方展开。
+          4. 最后一行底部多余留白去掉，八行等高（每行 46pt）。
 
-          其余不变：锚定 CC18 右上角电源控件，左文字右 SF 图标，命令直接 posix_spawn；日志 /var/mobile/Library/C18PowerMenu.log。
+          日志：/var/mobile/Library/C18PowerMenu.log。
           NOTES
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb --clobber
-            gh release edit "$TAG" --title "C18 Power Menu 1.7.1 (roothide / arm64e)" --notes-file /tmp/notes.md
+            gh release edit "$TAG" --title "C18 Power Menu 1.7.2 (roothide / arm64e)" --notes-file /tmp/notes.md
           else
             gh release create "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb \
-              --title "C18 Power Menu 1.7.1 (roothide / arm64e)" --notes-file /tmp/notes.md
+              --title "C18 Power Menu 1.7.2 (roothide / arm64e)" --notes-file /tmp/notes.md
           fi
