@@ -19,16 +19,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Probe
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          { date -u; uname -m; sw_vers; } | tee ci-probe.txt
-          git add -f ci-probe.txt
-          git commit -m "ci probe [skip ci]" || true
-          git pull --rebase origin main || true
-          git push origin HEAD:main || true
-
       - name: Install Theos (roothide) + iOS 16.5 SDK
         run: |
           set -x
@@ -66,7 +56,7 @@ jobs:
           git rm -r --cached dist >/dev/null 2>&1 || true
           rm -rf dist && mkdir -p dist
           if ls packages/*.deb >/dev/null 2>&1; then cp packages/*.deb dist/; fi
-          git add -f install-log.txt build-log.txt ci-probe.txt || true
+          git add -f install-log.txt build-log.txt || true
           git add -A dist || true
           if git diff --cached --quiet; then
             echo "nothing to commit"
@@ -85,22 +75,20 @@ jobs:
           ls -l dist/*.deb || { echo "no deb, skip release"; exit 0; }
           DEB=$(ls -t dist/*.deb | head -1)
           cp "$DEB" /tmp/C18PowerMenu_roothide_arm64e.deb
-          TAG="v1.7.4"
+          TAG="v1.7.5"
           cat > /tmp/notes.md <<'NOTES'
-          C18 Power Menu 1.7.4 (roothide / arm64e)
+          C18 Power Menu 1.7.5 (roothide / arm64e)
 
-          1. Floating power button no longer overlaps the card: moved half a row left and one row up, and it now uses the same SystemChromeMaterial blur as the card with matching corner style.
-          2. Added pop-in animation: the card springs from 0.86 scale, backdrop and dim fade in together.
-          3. Text and icons slightly smaller (17 -> 16).
-          4. Blur / dim toned down by a quarter: backdrop 0.75, dim 0.12.
+          1. Floating power button moved down half a row, clear of the card edge.
+          2. Background blur raised by a quarter (0.75 -> 0.94); dim stays 0.12.
+          3. Removed the 强制注销 row: it did exactly what 快速注销 does (both restart SpringBoard), menu is now 6 rows + cancel.
 
-          Trigger and actions unchanged: SpringBoard gets SIGTERM / SIGKILL / SIGSEGV in-process; shutdown via SBLockScreenManager.
           Log: /var/mobile/Library/C18PowerMenu.log
           NOTES
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb --clobber
-            gh release edit "$TAG" --title "C18 Power Menu 1.7.4 (roothide / arm64e)" --notes-file /tmp/notes.md
+            gh release edit "$TAG" --title "C18 Power Menu 1.7.5 (roothide / arm64e)" --notes-file /tmp/notes.md
           else
             gh release create "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb \
-              --title "C18 Power Menu 1.7.4 (roothide / arm64e)" --notes-file /tmp/notes.md
+              --title "C18 Power Menu 1.7.5 (roothide / arm64e)" --notes-file /tmp/notes.md
           fi
