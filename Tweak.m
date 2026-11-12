@@ -20,13 +20,13 @@ extern char **environ;
 typedef void (*PresentIMP)(id, SEL);
 
 typedef NS_ENUM(NSInteger, C18PowerAction) {
-    C18PowerActionSoftRespring = 0,   // 快速注销
+    C18PowerActionSoftRespring = 0,   // 快速注销 = Respring
     C18PowerActionHardRespring,       // 强制注销 (reserved)
-    C18PowerActionRestartDesktop,     // 重启桌面
-    C18PowerActionSafeMode,           // 安全模式
-    C18PowerActionUserspaceReboot,    // 重启空间
-    C18PowerActionReboot,             // 重启设备
-    C18PowerActionShutdown,           // 设备关机
+    C18PowerActionRestartDesktop,     // 重启桌面 = LDRestart
+    C18PowerActionSafeMode,           // 安全模式 = SafeMode
+    C18PowerActionUserspaceReboot,    // 重启空间 = RebootUserspace
+    C18PowerActionReboot,             // 重启设备 = Reboot
+    C18PowerActionShutdown,           // 设备关机 = Shutdown
     C18PowerActionCancel,             // 取消
 };
 
@@ -94,7 +94,7 @@ static BOOL C18SpawnPath(NSString *path, NSArray<NSString *> *args) {
     return rc == 0 && pid > 0;
 }
 
-static void C18Run(NSString *relative, NSArray<NSString *> *args) {
+static BOOL C18Run(NSString *relative, NSArray<NSString *> *args) {
     for (NSString *path in C18Candidates(relative)) {
         if (![[NSFileManager defaultManager] isExecutableFileAtPath:path]) {
             C18Log(@"skip %@ (not executable)", path);
@@ -102,9 +102,10 @@ static void C18Run(NSString *relative, NSArray<NSString *> *args) {
         }
         BOOL ok = C18SpawnPath(path, args);
         C18Log(@"spawn %@ %@ -> %d", path, [args componentsJoinedByString:@" "], ok);
-        if (ok) return;
+        if (ok) return YES;
     }
     C18Log(@"spawn %@ FAILED (no executable candidate)", relative);
+    return NO;
 }
 
 #pragma mark - actions
@@ -118,20 +119,47 @@ static void C18KillSelf(int signal) {
 
 // Some SpringBoard builds expose reboot/shutdown helpers; use them before
 // falling back to spawning a binary (which the sandbox often blocks).
+static BOOL C18DumpServiceOnce = NO;
+static void C18DumpServiceSelectors(id inst) {
+    if (C18DumpServiceOnce || !inst) return;
+    C18DumpServiceOnce = YES;
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(object_getClass(inst), &count);
+    NSMutableArray<NSString *> *hit = [NSMutableArray array];
+    for (unsigned int i = 0; i < count; i++) {
+        NSString *n = NSStringFromSelector(method_getName(methods[i]));
+        if ([n rangeOfString:@"reboot" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+            [n rangeOfString:@"shutdown" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+            [n rangeOfString:@"exitAnd" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+            [n rangeOfString:@"restart" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+            [n rangeOfString:@"safe" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+            [n rangeOfString:@"power" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+            [hit addObject:n];
+        }
+    }
+    free(methods);
+    C18Log(@"FBSystemService methods: %@", hit);
+}
+
 static BOOL C18CallSystemService(NSArray<NSString *> *selectors) {
     Class cls = NSClassFromString(@"FBSystemService");
-    if (!cls) return NO;
+    if (!cls) { C18Log(@"FBSystemService class missing"); return NO; }
     id inst = nil;
     SEL sharedSel = NSSelectorFromString(@"sharedInstance");
     if ([cls respondsToSelector:sharedSel]) {
         inst = ((id (*)(id, SEL))objc_msgSend)(cls, sharedSel);
     }
     if (!inst) inst = [cls new];
+    C18DumpServiceSelectors(inst);
     for (NSString *name in selectors) {
         SEL sel = NSSelectorFromString(name);
         if (![inst respondsToSelector:sel]) continue;
         C18Log(@"FBSystemService %@", name);
-        ((void (*)(id, SEL))objc_msgSend)(inst, sel);
+        if ([name hasSuffix:@":"]) {
+            ((void (*)(id, SEL, id))objc_msgSend)(inst, sel, nil);
+        } else {
+            ((void (*)(id, SEL))objc_msgSend)(inst, sel);
+        }
         return YES;
     }
     return NO;
@@ -141,24 +169,34 @@ static void C18RunAction(C18PowerAction action) {
     C18Log(@"action %ld", (long)action);
     switch (action) {
         case C18PowerActionSoftRespring:
+            // Respring: graceful SpringBoard restart (SIGTERM).
             C18KillSelf(SIGTERM);
             break;
         case C18PowerActionHardRespring:
             C18KillSelf(SIGKILL);
             break;
         case C18PowerActionRestartDesktop:
-            C18KillSelf(SIGTERM);
+            // LDRestart: reload SpringBoard through the ldrestart binary;
+            // fall back to a plain respring if the binary is blocked.
+            if (!C18Run(@"/usr/bin/ldrestart", @[])) {
+                C18KillSelf(SIGTERM);
+            }
             break;
         case C18PowerActionSafeMode:
-            C18KillSelf(SIGSEGV);
+            // SafeMode: private safe-mode selector first, then a SIGSEGV crash
+            // (matches killall -SEGV SpringBoard).
+            if (!C18CallSystemService(@[@"safeMode", @"enterSafeMode", @"rebootToSafeMode"])) {
+                C18KillSelf(SIGSEGV);
+            }
             break;
         case C18PowerActionUserspaceReboot:
-            if (!C18CallSystemService(@[@"userspaceReboot", @"rebootUserspace"])) {
+            // RebootUserspace: reboot the userspace, keep the jailbreak.
+            if (!C18CallSystemService(@[@"rebootUserspace", @"userspaceReboot", @"rebootToUserspace"])) {
                 C18Run(@"/bin/launchctl", @[@"reboot", @"userspace"]);
             }
             break;
         case C18PowerActionReboot:
-            if (!C18CallSystemService(@[@"reboot", @"exitAndReboot", @"shutdownAndReboot"])) {
+            if (!C18CallSystemService(@[@"reboot", @"shutdownAndReboot:", @"exitAndReboot", @"restartDevice"])) {
                 C18Run(@"/usr/bin/reboot", @[]);
             }
             break;
@@ -173,7 +211,7 @@ static void C18RunAction(C18PowerAction action) {
             if (inst && [inst respondsToSelector:sel]) {
                 C18Log(@"shutdown via SBLockScreenManager");
                 ((void (*)(id, SEL))objc_msgSend)(inst, sel);
-            } else if (!C18CallSystemService(@[@"shutdown", @"exitAndShutdown"])) {
+            } else if (!C18CallSystemService(@[@"shutdown", @"exitAndShutdown", @"shutdownAndPowerOff"])) {
                 C18Log(@"shutdown fallback failed (instance=%d)", inst != nil);
             }
             break;
@@ -226,7 +264,7 @@ static const CGFloat kRowHeight = 46.0;
 // Backdrop: one full-strength *adaptive* system material and no manual dim.
 // The adaptive style follows light/dark mode by itself, so light mode stays
 // light and dark mode gets its own darkening from the material - we never add
-// a black overlay on top of it. UltraThin keeps the blur gentle without graying.
+// a black overlay on top of it.
 static const CGFloat kBackdropAlpha = 1.0;
 static const CGFloat kDimAlpha = 0.0;   // no dimming at all
 static const CGFloat kNudgeX = 11.5;   // half a row left, a quarter row back right
@@ -302,7 +340,7 @@ static const CGFloat kNudgeY = 23.0;   // half a row down
     UIView *highlight = [[UIView alloc] init];
     highlight.tag = 777;
     highlight.userInteractionEnabled = NO;
-    highlight.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
+    highlight.backgroundColor = [[UIColor labelColor] colorWithAlphaComponent:0.15];
     highlight.alpha = 0;
     highlight.translatesAutoresizingMaskIntoConstraints = NO;
     [row addSubview:highlight];
@@ -449,8 +487,8 @@ static BOOL C18ShowMenu(void) {
     NSArray<NSDictionary *> *items = @[
         @{@"t": @"快速注销", @"g": @"rays",                          @"a": @(C18PowerActionSoftRespring)},
         @{@"t": @"重启桌面", @"g": @"apps.iphone",                   @"a": @(C18PowerActionRestartDesktop)},
-        @{@"t": @"安全模式", @"g": @"shield.lefthalf.filled",        @"a": @(C18PowerActionSafeMode)},
         @{@"t": @"重启空间", @"g": @"arrow.clockwise.circle",        @"a": @(C18PowerActionUserspaceReboot)},
+        @{@"t": @"安全模式", @"g": @"shield.lefthalf.filled",        @"a": @(C18PowerActionSafeMode)},
         @{@"t": @"重启设备", @"g": @"exclamationmark.arrow.circlepath", @"a": @(C18PowerActionReboot)},
         @{@"t": @"设备关机", @"g": @"power",                          @"a": @(C18PowerActionShutdown)},
     ];
