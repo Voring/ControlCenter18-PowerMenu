@@ -118,8 +118,6 @@ static void C18KillSelf(int signal) {
     });
 }
 
-// Some SpringBoard builds expose reboot/shutdown helpers; use them before
-// falling back to spawning a binary.
 static BOOL C18CallSystemService(NSArray<NSString *> *selectors) {
     Class cls = NSClassFromString(@"FBSystemService");
     if (!cls) return NO;
@@ -302,13 +300,13 @@ static const CGFloat kRowHeight = 46.0;
 
     UILabel *label = [[UILabel alloc] init];
     label.text = title;
-    label.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+    label.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
     label.textColor = destructive ? [UIColor systemRedColor] : [UIColor labelColor];
     label.translatesAutoresizingMaskIntoConstraints = NO;
     [row addSubview:label];
 
     UIImageView *icon = [[UIImageView alloc] init];
-    UIImageConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:17 weight:UIImageSymbolWeightSemibold];
+    UIImageConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightSemibold];
     icon.image = [UIImage systemImageNamed:glyph withConfiguration:cfg];
     icon.tintColor = destructive ? [UIColor systemRedColor] : [UIColor labelColor];
     icon.contentMode = UIViewContentModeScaleAspectFit;
@@ -428,12 +426,11 @@ static BOOL C18ShowMenu(void) {
 
     UIVisualEffectView *backdrop = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
     backdrop.frame = screen;
-    backdrop.alpha = 1.0;
     backdrop.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [overlay addSubview:backdrop];
 
     UIView *dim = [[UIView alloc] initWithFrame:screen];
-    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.16];
+    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.12];
     dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:vc action:@selector(backgroundTapped)];
     [dim addGestureRecognizer:tap];
@@ -469,22 +466,30 @@ static BOOL C18ShowMenu(void) {
     vc.card = card;
     [overlay addSubview:card];
 
-    // The real glyph is now hidden behind the blur; redraw it as a floating
-    // circle in the same layer so the button stays crisp, at its own position.
+    // The real glyph sits behind the blur; redraw it as a floating circle at its
+    // own spot - nudged half a row left and one row up so it clears the card -
+    // using the same material as the card so the two read as one layer.
     CGFloat side = MAX(34, MIN(glyph.size.width, 42));
-    UIView *circle = [[UIView alloc] initWithFrame:CGRectMake(CGRectGetMidX(glyph) - side / 2,
-                                                             CGRectGetMidY(glyph) - side / 2,
+    UIView *circle = [[UIView alloc] initWithFrame:CGRectMake(CGRectGetMidX(glyph) - side / 2 - 23,
+                                                             CGRectGetMidY(glyph) - side / 2 - 46,
                                                              side, side)];
-    circle.backgroundColor = [UIColor colorWithWhite:1 alpha:0.24];
+    circle.backgroundColor = [UIColor clearColor];
     circle.layer.cornerRadius = side / 2;
     circle.layer.cornerCurve = kCACornerCurveContinuous;
+    circle.clipsToBounds = YES;
+
+    UIVisualEffectView *circleBlur = [[UIVisualEffectView alloc]
+        initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemChromeMaterial]];
+    circleBlur.frame = circle.bounds;
+    circleBlur.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [circle addSubview:circleBlur];
 
     UIImageView *powerIcon = [[UIImageView alloc] initWithImage:
         [UIImage systemImageNamed:@"power"
-              withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightSemibold]]];
+              withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightSemibold]]];
     powerIcon.tintColor = [UIColor labelColor];
     powerIcon.contentMode = UIViewContentModeScaleAspectFit;
-    powerIcon.frame = CGRectMake((side - 22) / 2, (side - 22) / 2, 22, 22);
+    powerIcon.frame = CGRectMake((side - 21) / 2, (side - 21) / 2, 21, 21);
     powerIcon.userInteractionEnabled = NO;
     [circle addSubview:powerIcon];
 
@@ -506,8 +511,29 @@ static BOOL C18ShowMenu(void) {
         C18HideMenu();
     };
 
+    // Pop-in: the card scales up while the backdrop fades in.
+    card.transform = CGAffineTransformMakeScale(0.86, 0.86);
+    card.alpha = 0;
+    circle.alpha = 0;
+    backdrop.alpha = 0;
+    dim.alpha = 0;
+
     [host addSubview:overlay];
     [host bringSubviewToFront:overlay];
+
+    [UIView animateWithDuration:0.28
+                          delay:0
+         usingSpringWithDamping:0.78
+          initialSpringVelocity:0.4
+                        options:UIViewAnimationOptionCurveEaseOut
+                     animations:^{
+        card.transform = CGAffineTransformIdentity;
+        card.alpha = 1;
+        circle.alpha = 1;
+        backdrop.alpha = 0.75;
+        dim.alpha = 1;
+    } completion:nil];
+
     g_overlay = overlay;
     g_menuVC = vc;
     C18Log(@"show menu at %.1f,%.1f size %.1fx%.1f", x, y, cardWidth, cardHeight);
