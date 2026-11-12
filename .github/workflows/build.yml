@@ -15,7 +15,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Probe
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          date -u > ci-probe.txt
+          git add -f ci-probe.txt
+          git commit -m "ci probe [skip ci]" || true
+          git push || true
+
       - name: Install Theos
+        continue-on-error: true
         run: |
           brew install ldid xz
           git clone --recursive --depth 1 https://github.com/theos/theos.git "$HOME/theos"
@@ -33,13 +43,12 @@ jobs:
       - name: Commit build log
         if: always()
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          touch build-log.txt
           git add -f build-log.txt || true
           if git diff --cached --quiet; then exit 0; fi
           git commit -m "build log [skip ci]"
           git pull --rebase || true
-          git push
+          git push || true
 
       - name: Commit deb
         if: always()
@@ -51,4 +60,4 @@ jobs:
           if git diff --cached --quiet; then exit 0; fi
           git commit -m "deb build [skip ci]"
           git pull --rebase || true
-          git push
+          git push || true
