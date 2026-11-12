@@ -77,7 +77,7 @@ static BOOL C18SpawnPath(NSString *path, NSArray<NSString *> *args) {
     int i = 0;
     argv[i++] = strdup(path.UTF8String);
     for (NSString *arg in args) {
-        if (i >= 16) break;
+        if (i >= 15) break;
         argv[i++] = strdup(arg.UTF8String);
     }
     argv[i] = NULL;
@@ -167,7 +167,7 @@ static void C18RunAction(C18PowerAction action) {
             SEL sharedSel = NSSelectorFromString(@"sharedInstanceIfExists");
             id inst = nil;
             if ([mgr respondsToSelector:sharedSel]) {
-                inst = ((id (*)(id, SEL))msgInstance(mgr, sharedSel);
+                inst = ((id (*)(id, SEL))objc_msgSend)(mgr, sharedSel);
             }
             SEL sel = NSSelectorFromString(@"presentPowerDownTransientOverlay");
             if (inst && [inst respondsToSelector:sel]) {
