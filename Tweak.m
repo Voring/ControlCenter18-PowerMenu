@@ -20,13 +20,13 @@ extern char **environ;
 typedef void (*PresentIMP)(id, SEL);
 
 typedef NS_ENUM(NSInteger, C18PowerAction) {
-    C18PowerActionSoftRespring = 0,   // 快速注销 = Respring
-    C18PowerActionHardRespring,       // 强制注销 (reserved)
-    C18PowerActionRestartDesktop,     // 重启桌面 = LDRestart
-    C18PowerActionSafeMode,           // 安全模式 = SafeMode
-    C18PowerActionUserspaceReboot,    // 重启空间 = RebootUserspace
-    C18PowerActionReboot,             // 重启设备 = Reboot
-    C18PowerActionShutdown,           // 设备关机 = Shutdown
+    C18PowerActionSoftRespring = 0,   // 快速注销
+    C18PowerActionHardRespring,       // 强制注销
+    C18PowerActionRestartDesktop,     // 重启桌面
+    C18PowerActionSafeMode,           // 安全模式
+    C18PowerActionUserspaceReboot,    // 重启空间
+    C18PowerActionReboot,             // 重启设备
+    C18PowerActionShutdown,           // 设备关机
     C18PowerActionCancel,             // 取消
 };
 
@@ -51,25 +51,156 @@ static void C18Log(NSString *format, ...) {
 
 #pragma mark - jbroot / spawn
 
+// roothide hides the bootstrap root, so /var/jb does not exist there. Every
+// spawn attempt below needs the *real* path, otherwise it silently fails with
+// "not executable" - that is exactly why userspace reboot and safe mode did
+// nothing. Resolve the root at runtime and log each step.
+static NSString *C18DylibPrefix(void) {
+    static NSString *prefix = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Dl_info info;
+        if (dladdr((void *)&C18DylibPrefix, &info) && info.dli_fname) {
+            NSString *path = [NSString stringWithUTF8String:info.dli_fname];
+            NSRange r = [path rangeOfString:@"/Library/MobileSubstrate/DynamicLibraries/"];
+            if (r.location != NSNotFound) prefix = [path substringToIndex:r.location];
+        }
+    });
+    return prefix;
+}
+
+// roothide ships libroothide.dylib with "const char *jbroot(const char *)".
+// CCRespring (which the user confirmed works) links it directly; we load it at
+// runtime and use the very same translation instead of guessing /var/jb.
+static void *C18RoohideHandle(void) {
+    static void *handle = NULL;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSString *prefix = C18DylibPrefix();
+        NSMutableArray<NSString *> *paths = [NSMutableArray array];
+        if (prefix) [paths addObject:[prefix stringByAppendingPathComponent:@"usr/lib/libroothide.dylib"]];
+        [paths addObject:@"/usr/lib/libroothide.dylib"];
+        [paths addObject:@"/var/jb/usr/lib/libroothide.dylib"];
+        for (NSString *path in paths) {
+            handle = dlopen(path.UTF8String, RTLD_LAZY);
+            if (handle) { C18Log(@"libroothide loaded from %@", path); break; }
+            C18Log(@"libroothide dlopen failed %@", path);
+        }
+        if (!handle) {
+            handle = dlopen("libroothide.dylib", RTLD_LAZY);
+            if (handle) C18Log(@"libroothide loaded by name");
+        }
+        if (handle) {
+            if (!dlsym(handle, "jbroot")) C18Log(@"libroothide has no jbroot symbol");
+        }
+    });
+    return handle;
+}
+
+static const char *(*C18JBrootFn(void))(const char *) {
+    void *handle = C18RoohideHandle();
+    if (!handle) return NULL;
+    static const char *(*fn)(const char *) = NULL;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        fn = (const char *(*)(const char *))dlsym(handle, "jbroot");
+    });
+    return fn;
+}
+
+// Real path for a jbroot-relative path, e.g. "/usr/bin/launchctl".
+static NSString *C18JBPath(NSString *relative) {
+    const char *(*fn)(const char *) = C18JBrootFn();
+    if (fn) {
+        const char *p = fn(relative.UTF8String);
+        if (p && p[0]) return [NSString stringWithUTF8String:p];
+    }
+    return nil;
+}
+
+static BOOL C18IsExec(NSString *path) {
+    return path.length > 1 && [[NSFileManager defaultManager] isExecutableFileAtPath:path];
+}
+
+static NSString *C18ScanContainersForRoot(void) {
+    NSString *base = @"/var/containers/Bundle/Application";
+    NSArray<NSString *> *dirs = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:base error:NULL];
+    C18Log(@"scan %@ -> %lu entries", base, (unsigned long)dirs.count);
+    for (NSString *d in dirs) {
+        NSString *cand = [[base stringByAppendingPathComponent:d] stringByAppendingPathComponent:@".jbroot"];
+        if (C18IsExec([cand stringByAppendingPathComponent:@"usr/bin/killall"])) return cand;
+    }
+    return nil;
+}
+
 static NSString *C18JBRoot(void) {
     static NSString *root = nil;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        Dl_info info;
-        if (dladdr((void *)&C18JBRoot, &info) && info.dli_fname) {
-            NSString *path = [NSString stringWithUTF8String:info.dli_fname];
-            NSRange r = [path rangeOfString:@"/Library/MobileSubstrate/DynamicLibraries/"];
-            if (r.location != NSNotFound) root = [path substringToIndex:r.location];
+        // 1) roothide runtime translation - authoritative
+        NSString *probe = C18JBPath(@"/usr/bin/killall");
+        if (probe) C18Log(@"jbroot probe %@ (exists=%d)", probe, C18IsExec(probe));
+        if (probe.length) {
+            NSString *r = [probe stringByDeletingLastPathComponent];   // .../usr/bin
+            r = [r stringByDeletingLastPathComponent];                  // .../usr
+            r = [r stringByDeletingLastPathComponent];                  // jbroot
+            root = r;
+            C18Log(@"jbroot from libroothide = %@", root);
         }
-        if (!root) root = @"/var/jb";
+
+        // 2) environment
+        if (!root) {
+            for (NSString *key in @[@"JBROOT", @"JB_ROOT", @"DOPAMINE_ROOT"]) {
+                NSString *v = NSProcessInfo.processInfo.environment[key];
+                if (C18IsExec([v stringByAppendingPathComponent:@"usr/bin/killall"])) {
+                    root = v;
+                    C18Log(@"jbroot from env %@ = %@", key, v);
+                    break;
+                }
+            }
+        }
+
+        // 3) the ".jbroot" symlink sitting next to our own dylib
+        if (!root && C18DylibPrefix()) {
+            NSString *prefix = C18DylibPrefix();
+            C18Log(@"dylib prefix = %@", prefix);
+            if (C18IsExec([prefix stringByAppendingPathComponent:@"usr/bin/killall"])) {
+                root = prefix;
+                C18Log(@"jbroot from dylib prefix = %@", root);
+            }
+        }
+
+        // 4) classic rootless layout
+        if (!root && C18IsExec(@"/var/jb/usr/bin/killall")) {
+            root = @"/var/jb";
+            C18Log(@"jbroot = /var/jb");
+        }
+
+        // 5) hidden root inside app containers
+        if (!root) {
+            root = C18ScanContainersForRoot();
+            if (root) C18Log(@"jbroot from container scan = %@", root);
+        }
+
+        if (!root) {
+            root = @"/var/jb";
+            C18Log(@"jbroot UNRESOLVED, falling back to %@", root);
+        }
+        C18Log(@"jbroot final = %@", root);
     });
     return root;
 }
 
 static NSArray<NSString *> *C18Candidates(NSString *relative) {
+    NSMutableArray<NSString *> *list = [NSMutableArray array];
+    NSString *translated = C18JBPath(relative);
+    if (translated.length) [list addObject:translated];
     NSString *full = [C18JBRoot() stringByAppendingPathComponent:relative];
-    if ([full isEqualToString:relative]) return @[relative];
-    return @[full, relative];
+    if (full.length && ![list containsObject:full]) [list addObject:full];
+    NSString *plainJB = [@"/var/jb" stringByAppendingPathComponent:relative];
+    if (![list containsObject:plainJB]) [list addObject:plainJB];
+    if (![list containsObject:relative]) [list addObject:relative];
+    return list;
 }
 
 static BOOL C18SpawnPath(NSString *path, NSArray<NSString *> *args) {
@@ -91,12 +222,16 @@ static BOOL C18SpawnPath(NSString *path, NSArray<NSString *> *args) {
     pid_t pid = 0;
     int rc = posix_spawn(&pid, path.UTF8String, &actions, NULL, (char *const *)argv, environ);
     posix_spawn_file_actions_destroy(&actions);
+    if (rc != 0) C18Log(@"spawn rc=%d (%@)", rc, path);
     return rc == 0 && pid > 0;
 }
 
 static BOOL C18Run(NSString *relative, NSArray<NSString *> *args) {
+    if (!C18IsExec([C18JBRoot() stringByAppendingPathComponent:relative])) {
+        C18Log(@"root %@ has no executable %@", C18JBRoot(), relative);
+    }
     for (NSString *path in C18Candidates(relative)) {
-        if (![[NSFileManager defaultManager] isExecutableFileAtPath:path]) {
+        if (!C18IsExec(path)) {
             C18Log(@"skip %@ (not executable)", path);
             continue;
         }
@@ -104,7 +239,7 @@ static BOOL C18Run(NSString *relative, NSArray<NSString *> *args) {
         C18Log(@"spawn %@ %@ -> %d", path, [args componentsJoinedByString:@" "], ok);
         if (ok) return YES;
     }
-    C18Log(@"spawn %@ FAILED (no executable candidate)", relative);
+    C18Log(@"spawn %@ FAILED (no working candidate)", relative);
     return NO;
 }
 
@@ -114,6 +249,17 @@ static void C18KillSelf(int signal) {
     C18Log(@"kill SpringBoard with signal %d", signal);
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         kill(getpid(), signal);
+
+        if (signal == SIGSEGV) {
+            // A blocked / ignored SIGSEGV is why "safe mode" looked like a
+            // no-op. Give the handler a moment, then force a real fault.
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                C18Log(@"SIGSEGV was swallowed, forcing a fault");
+                raise(SIGSEGV);
+                *(volatile int *)0 = 0;
+                __builtin_trap();
+            });
+        }
     });
 }
 
@@ -141,16 +287,30 @@ static void C18DumpServiceSelectors(id inst) {
     C18Log(@"FBSystemService methods: %@", hit);
 }
 
-static BOOL C18CallSystemService(NSArray<NSString *> *selectors) {
+static id C18SystemServiceInstance(void) {
     Class cls = NSClassFromString(@"FBSystemService");
-    if (!cls) { C18Log(@"FBSystemService class missing"); return NO; }
+    if (!cls) { C18Log(@"FBSystemService class missing"); return nil; }
+
     id inst = nil;
     SEL sharedSel = NSSelectorFromString(@"sharedInstance");
     if ([cls respondsToSelector:sharedSel]) {
         inst = ((id (*)(id, SEL))objc_msgSend)(cls, sharedSel);
     }
-    if (!inst) inst = [cls new];
+    if (!inst) {
+        SEL alt = NSSelectorFromString(@"sharedService");
+        if ([cls respondsToSelector:alt]) inst = ((id (*)(id, SEL))objc_msgSend)(cls, alt);
+    }
+    if (!inst) {
+        inst = [cls new];
+        C18Log(@"FBSystemService has no shared instance, using fresh object");
+    }
     C18DumpServiceSelectors(inst);
+    return inst;
+}
+
+static BOOL C18CallSystemService(NSArray<NSString *> *selectors) {
+    id inst = C18SystemServiceInstance();
+    if (!inst) return NO;
     for (NSString *name in selectors) {
         SEL sel = NSSelectorFromString(name);
         if (![inst respondsToSelector:sel]) continue;
@@ -162,60 +322,79 @@ static BOOL C18CallSystemService(NSArray<NSString *> *selectors) {
         }
         return YES;
     }
+    C18Log(@"FBSystemService none of %@", selectors);
     return NO;
+}
+
+// shutdownAndReboot: takes a BOOL - YES reboots, NO powers off. Passing nil
+// (as we did before) reads as NO, which is why "reboot" turned into a shutdown.
+static BOOL C18CallSystemServiceBool(NSString *name, BOOL value) {
+    id inst = C18SystemServiceInstance();
+    if (!inst) return NO;
+    SEL sel = NSSelectorFromString(name);
+    if (![inst respondsToSelector:sel]) {
+        C18Log(@"FBSystemService missing %@", name);
+        return NO;
+    }
+    C18Log(@"FBSystemService %@(%d)", name, value);
+    ((void (*)(id, SEL, BOOL))objc_msgSend)(inst, sel, value);
+    return YES;
 }
 
 static void C18RunAction(C18PowerAction action) {
     C18Log(@"action %ld", (long)action);
     switch (action) {
         case C18PowerActionSoftRespring:
-            // Respring: graceful SpringBoard restart (SIGTERM).
+            // Respring: graceful SpringBoard restart.
             C18KillSelf(SIGTERM);
             break;
         case C18PowerActionHardRespring:
             C18KillSelf(SIGKILL);
             break;
         case C18PowerActionRestartDesktop:
-            // LDRestart: reload SpringBoard through the ldrestart binary;
-            // fall back to a plain respring if the binary is blocked.
+            // LDRestart: restart daemons + SpringBoard through ldrestart.
             if (!C18Run(@"/usr/bin/ldrestart", @[])) {
                 C18KillSelf(SIGTERM);
             }
             break;
-        case C18PowerActionSafeMode:
-            // SafeMode: private safe-mode selector first, then a SIGSEGV crash
-            // (matches killall -SEGV SpringBoard).
-            if (!C18CallSystemService(@[@"safeMode", @"enterSafeMode", @"rebootToSafeMode"])) {
+        case C18PowerActionSafeMode: {
+            // SafeMode: same command CCRespring uses - killall -SEGV SpringBoard.
+            if (!C18Run(@"/usr/bin/killall", @[@"-SEGV", @"SpringBoard"])) {
+                C18Log(@"safe mode: killall unavailable, crashing in-process");
                 C18KillSelf(SIGSEGV);
             }
             break;
-        case C18PowerActionUserspaceReboot:
-            // RebootUserspace: reboot the userspace, keep the jailbreak.
-            if (!C18CallSystemService(@[@"rebootUserspace", @"userspaceReboot", @"rebootToUserspace"])) {
-                C18Run(@"/bin/launchctl", @[@"reboot", @"userspace"]);
-            }
-            break;
-        case C18PowerActionReboot:
-            if (!C18CallSystemService(@[@"reboot", @"shutdownAndReboot:", @"exitAndReboot", @"restartDevice"])) {
-                C18Run(@"/usr/bin/reboot", @[]);
-            }
-            break;
-        case C18PowerActionShutdown: {
-            Class mgr = NSClassFromString(@"SBLockScreenManager");
-            SEL sharedSel = NSSelectorFromString(@"sharedInstanceIfExists");
-            id inst = nil;
-            if ([mgr respondsToSelector:sharedSel]) {
-                inst = ((id (*)(id, SEL))objc_msgSend)(mgr, sharedSel);
-            }
-            SEL sel = NSSelectorFromString(@"presentPowerDownTransientOverlay");
-            if (inst && [inst respondsToSelector:sel]) {
-                C18Log(@"shutdown via SBLockScreenManager");
-                ((void (*)(id, SEL))objc_msgSend)(inst, sel);
-            } else if (!C18CallSystemService(@[@"shutdown", @"exitAndShutdown", @"shutdownAndPowerOff"])) {
-                C18Log(@"shutdown fallback failed (instance=%d)", inst != nil);
+        }
+        case C18PowerActionUserspaceReboot: {
+            // RebootUserspace: launchctl reboot userspace, exactly like
+            // CCRespring. If the sandbox blocks the spawn there is no
+            // in-process equivalent, so fall back to LDRestart (keeps the
+            // jailbreak, restarts daemons + SpringBoard).
+            if (!C18Run(@"/usr/bin/launchctl", @[@"reboot", @"userspace"])) {
+                C18Log(@"userspace reboot: launchctl blocked, falling back to ldrestart");
+                if (!C18Run(@"/usr/bin/ldrestart", @[])) {
+                    C18KillSelf(SIGTERM);
+                }
             }
             break;
         }
+        case C18PowerActionReboot:
+            // Reboot: shutdownAndReboot:YES. Older builds passed nil here and
+            // the device simply powered off.
+            if (!C18CallSystemServiceBool(@"shutdownAndReboot:", YES)) {
+                if (!C18CallSystemService(@[@"reboot", @"restartDevice"])) {
+                    C18Run(@"/usr/bin/reboot", @[]);
+                }
+            }
+            break;
+        case C18PowerActionShutdown:
+            // Shutdown: shutdownAndReboot:NO powers off immediately.
+            if (!C18CallSystemServiceBool(@"shutdownAndReboot:", NO)) {
+                if (!C18CallSystemService(@[@"shutdown", @"shutdownAndPowerOff", @"exitAndShutdown"])) {
+                    C18Log(@"shutdown: no usable selector");
+                }
+            }
+            break;
         case C18PowerActionCancel:
             break;
     }
@@ -499,9 +678,10 @@ static BOOL C18ShowMenu(void) {
     CGFloat x = MIN(MAX(glyph.origin.x + glyph.size.width - cardWidth, 12), right - cardWidth);
     CGFloat y = glyph.origin.y + glyph.size.height + 8;
 
-    // Nudge so the card lines up under the power button instead of beside it.
+    // Nudge: up half a row, left half a row, so the card reads as opening under
+    // the power button itself.
     x -= kNudgeX;
-    y -= kNudgeY;
+    y -= 23;
     if (x < 12) x = 12;
     if (y + cardHeight > screen.size.height - 40) {
         y = MAX(glyph.origin.y - cardHeight - 8, 40);
@@ -513,8 +693,8 @@ static BOOL C18ShowMenu(void) {
     [overlay addSubview:card];
 
     // The real glyph sits behind the blur; redraw it as a floating circle at its
-    // own spot - nudged with the same offsets as the card - using the same
-    // material as the card so the two read as one layer.
+    // own spot - nudged half a row left and one row up so it clears the card -
+    // using the same material as the card so the two read as one layer.
     CGFloat side = MAX(34, MIN(glyph.size.width, 42));
     UIView *circle = [[UIView alloc] initWithFrame:CGRectMake(CGRectGetMidX(glyph) - side / 2 - kNudgeX,
                                                              CGRectGetMidY(glyph) - side / 2 - kNudgeY,
@@ -557,8 +737,7 @@ static BOOL C18ShowMenu(void) {
         C18HideMenu();
     };
 
-    // Drop-down: the card starts a bit higher and smaller, then slides down
-    // into place while the backdrop fades in.
+    // Pop-in: the card scales up while the backdrop fades in.
     card.transform = CGAffineTransformConcat(CGAffineTransformMakeScale(0.92, 0.92),
                                                  CGAffineTransformMakeTranslation(0, -18));
     card.alpha = 0;
