@@ -4,29 +4,51 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Theos
         run: |
           brew install ldid xz
           git clone --recursive --depth 1 https://github.com/theos/theos.git "$HOME/theos"
           mkdir -p "$HOME/theos/sdks"
-          curl -L -o /tmp/sdk.tar.xz https://github.com/theos/sdks/releases/download/master/iPhoneOS16.5.sdk.tar.xz
+          curl -L --fail -o /tmp/sdk.tar.xz https://github.com/theos/sdks/releases/download/master/iPhoneOS16.5.sdk.tar.xz
           tar -xf /tmp/sdk.tar.xz -C "$HOME/theos/sdks"
 
-      - name: Build package
+      - name: Build arm64e
+        continue-on-error: true
         env:
           THEOS: ${{ github.workspace }}/../theos
         run: |
-          make clean
-          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless ARCHS=arm64
+          { make clean; make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless ARCHS=arm64e; } 2>&1 | tee build-log.txt
 
-      - name: Upload deb
-        uses: actions/upload-artifact@v4
-        with:
-          name: C18PowerMenu-deb
-          path: packages/*.deb
+      - name: Commit build log
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f build-log.txt || true
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "build log [skip ci]"
+          git pull --rebase || true
+          git push
+
+      - name: Commit deb
+        if: always()
+        run: |
+          ls packages/*.deb >/dev/null 2>&1 || exit 0
+          mkdir -p dist
+          cp packages/*.deb dist/
+          git add -f dist/*.deb
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "deb build [skip ci]"
+          git pull --rebase || true
+          git push
