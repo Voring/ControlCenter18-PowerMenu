@@ -22,7 +22,7 @@ typedef void (*PresentIMP)(id, SEL);
 typedef NS_ENUM(NSInteger, C18PowerAction) {
     C18PowerActionSoftRespring = 0,   // 快速注销
     C18PowerActionHardRespring,       // 强制注销
-    C18PowerActionRestartDesktop,     // 重启桌面
+    C18PowerActionRestartDesktop,     // 重启桌面（保留枚举，菜单已移除）
     C18PowerActionSafeMode,           // 安全模式
     C18PowerActionUserspaceReboot,    // 重启空间
     C18PowerActionReboot,             // 重启设备
@@ -498,7 +498,10 @@ static const CGFloat kNudgeY = 23.0;   // half a row down
 
 @interface C18MenuViewController : UIViewController
 @property (nonatomic, strong) C18MenuCard *card;
+@property (nonatomic, strong) C18MenuCard *confirmCard;
+@property (nonatomic, strong) UIView *overlayView;
 @property (nonatomic, copy) void (^onDismiss)(void);
+- (void)askConfirmForTitle:(NSString *)title action:(C18PowerAction)action;
 @end
 
 @implementation C18MenuViewController
@@ -594,6 +597,31 @@ static const CGFloat kNudgeY = 23.0;   // half a row down
     [UIView animateWithDuration:0.1 animations:^{ hl.alpha = 0; }];
 
     C18PowerAction action = (C18PowerAction)sender.tag;
+
+    // A row inside the confirmation card: cancel only closes that card.
+    if (self.confirmCard) {
+        if (action == C18PowerActionCancel) {
+            [self dismissConfirm];
+        } else {
+            [self performAction:action];
+        }
+        return;
+    }
+
+    switch (action) {
+        case C18PowerActionReboot:
+            [self askConfirmForTitle:@"是否确认重启设备？" action:action];
+            break;
+        case C18PowerActionShutdown:
+            [self askConfirmForTitle:@"是否确认关机？" action:action];
+            break;
+        default:
+            [self performAction:action];
+            break;
+    }
+}
+
+- (void)performAction:(C18PowerAction)action {
     void (^dismiss)(void) = self.onDismiss;
     if (dismiss) dismiss();
 
@@ -602,7 +630,71 @@ static const CGFloat kNudgeY = 23.0;   // half a row down
     });
 }
 
+- (void)dismissConfirm {
+    [UIView animateWithDuration:0.16 animations:^{
+        self.confirmCard.alpha = 0;
+        self.confirmCard.transform = CGAffineTransformMakeScale(0.94, 0.94);
+    } completion:^(BOOL finished) {
+        [self.confirmCard removeFromSuperview];
+        self.confirmCard = nil;
+    }];
+}
+
+// Second factor for the two irreversible rows. Same material, same row
+// anatomy; it simply sits above the menu card and taps outside cancel it.
+- (void)askConfirmForTitle:(NSString *)title action:(C18PowerAction)action {
+    if (self.confirmCard || !self.overlayView) return;
+
+    CGFloat width = 200;
+    CGFloat height = kRowHeight * 3;
+    CGRect screen = self.overlayView.bounds;
+    C18MenuCard *confirm = [[C18MenuCard alloc] initWithFrame:
+        CGRectMake((screen.size.width - width) / 2, (screen.size.height - height) / 2, width, height)];
+
+    UIView *titleRow = [[UIView alloc] initWithFrame:CGRectZero];
+    titleRow.backgroundColor = [UIColor clearColor];
+    UILabel *titleLabel = [[UILabel alloc] init];
+    titleLabel.text = title;
+    titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+    titleLabel.textColor = [UIColor secondaryLabelColor];
+    titleLabel.textAlignment = NSTextAlignmentCenter;
+    titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    [titleRow addSubview:titleLabel];
+    [NSLayoutConstraint activateConstraints:@[
+        [titleLabel.leadingAnchor constraintEqualToAnchor:titleRow.leadingAnchor constant:12],
+        [titleLabel.trailingAnchor constraintEqualToAnchor:titleRow.trailingAnchor constant:-12],
+        [titleLabel.centerYAnchor constraintEqualToAnchor:titleRow.centerYAnchor],
+    ]];
+    [confirm.rows addObject:titleRow];
+    [confirm.blur.contentView addSubview:titleRow];
+
+    C18MenuCard *saved = self.card;
+    self.card = confirm;
+    [self addRowWithTitle:@"确认" glyph:@"checkmark" destructive:(action == C18PowerActionShutdown)
+                    action:action last:NO];
+    [self addRowWithTitle:@"取消" glyph:@"xmark" destructive:NO
+                    action:C18PowerActionCancel last:YES];
+    self.card = saved;
+    [confirm layoutRows];
+
+    confirm.alpha = 0;
+    confirm.transform = CGAffineTransformMakeScale(0.92, 0.92);
+    [self.overlayView addSubview:confirm];
+    [self.overlayView bringSubviewToFront:confirm];
+    self.confirmCard = confirm;
+
+    [UIView animateWithDuration:0.22 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.3
+                        options:UIViewAnimationOptionCurveEaseOut animations:^{
+        confirm.alpha = 1;
+        confirm.transform = CGAffineTransformIdentity;
+    } completion:nil];
+}
+
 - (void)backgroundTapped {
+    if (self.confirmCard) {
+        [self dismissConfirm];
+        return;
+    }
     void (^dismiss)(void) = self.onDismiss;
     if (dismiss) dismiss();
 }
@@ -646,7 +738,6 @@ static BOOL C18ShowMenu(void) {
            screen.size.width, screen.size.height);
 
     C18MenuViewController *vc = [[C18MenuViewController alloc] init];
-
     UIView *overlay = [[UIView alloc] initWithFrame:screen];
     overlay.backgroundColor = [UIColor clearColor];
 
@@ -662,10 +753,10 @@ static BOOL C18ShowMenu(void) {
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:vc action:@selector(backgroundTapped)];
     [dim addGestureRecognizer:tap];
     [overlay addSubview:dim];
+    vc.overlayView = overlay;
 
     NSArray<NSDictionary *> *items = @[
         @{@"t": @"快速注销", @"g": @"rays",                          @"a": @(C18PowerActionSoftRespring)},
-        @{@"t": @"重启桌面", @"g": @"apps.iphone",                   @"a": @(C18PowerActionRestartDesktop)},
         @{@"t": @"重启空间", @"g": @"arrow.clockwise.circle",        @"a": @(C18PowerActionUserspaceReboot)},
         @{@"t": @"安全模式", @"g": @"shield.lefthalf.filled",        @"a": @(C18PowerActionSafeMode)},
         @{@"t": @"重启设备", @"g": @"exclamationmark.arrow.circlepath", @"a": @(C18PowerActionReboot)},

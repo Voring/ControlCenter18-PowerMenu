@@ -75,30 +75,28 @@ jobs:
           ls -l dist/*.deb || { echo "no deb, skip release"; exit 0; }
           DEB=$(ls -t dist/*.deb | head -1)
           cp "$DEB" /tmp/C18PowerMenu_roothide_arm64e.deb
-          TAG="v1.7.12"
+          TAG="v1.7.13"
           cat > /tmp/notes.md <<'NOTES'
-          C18 Power Menu 1.7.12 (roothide / arm64e)
+          C18 Power Menu 1.7.13 (roothide / arm64e)
 
-          This build actually contains the fixes. The 1.7.10 and 1.7.11 packages were built from a stale source snapshot, so please install 1.7.12 instead.
+          Menu: 快速注销 / 重启空间 / 安全模式 / 重启设备 / 设备关机 / 取消操作.
+          - 重启桌面 (ldrestart) removed - it duplicated respring without resetting daemons.
+          - 重启设备 and 设备关机 now ask first: a second small card "是否确认重启设备？" / "是否确认关机？" with 确认 / 取消, same material, tap outside to cancel.
 
-          Userspace reboot now mirrors CCRespring exactly:
-          - loads libroothide.dylib and calls its exported const char *jbroot(const char *)
-          - spawns the translated /usr/bin/launchctl with "reboot userspace"
-          - roothide unsandboxes SpringBoard (its preload calls unsandbox with the sb_token), so the spawn is allowed once the path is translated
-          - if the spawn is still refused it falls back to ldrestart, never a silent no-op
+          Actions, matching what PowerSelector11 (ichitaso) does:
+          - 快速注销 = SpringBoard SIGTERM (respring)
+          - 重启空间 = translated /usr/bin/launchctl reboot userspace (same call CCRespring makes), ldrestart as fallback
+          - 安全模式 = killall -SEGV SpringBoard with an in-process forced fault as fallback
+          - 重启设备 = FBSystemService shutdownAndReboot:YES
+          - 设备关机 = FBSystemService shutdownAndReboot:NO
+          PowerSelector11 confirms both of these on-device paths: it also uses FBSystemService shutdownAndReboot:, and for userspace reboot it ships an entitled helper that talks to launchd over XPC (entitlement com.apple.private.xpc.launchd.userspace-reboot). If the launchctl spawn in our package is refused on your device, the log will say so and we can ship the same kind of helper.
 
-          Reboot / shutdown, based on the FBSystemService method list dumped on-device (exitAndRelaunch:, shutdownAndReboot:, shutdownWithOptions:):
-          - 重启设备 = shutdownAndReboot:YES (the old nil argument read as NO and powered the device off)
-          - 设备关机 = shutdownAndReboot:NO
-
-          Safe mode keeps killall -SEGV SpringBoard plus a forced in-process fault. Note this jailbreak has no Substrate-style safe mode catcher, so a SpringBoard crash simply reloads - CCRespring's SafeMode behaves the same here.
-
-          Diagnostics land in /var/mobile/Library/C18PowerMenu.log: libroothide load result, the jbroot probe path, every spawn candidate and its rc.
+          Diagnostics: /var/mobile/Library/C18PowerMenu.log - libroothide load result, jbroot probe, every spawn candidate and rc.
           NOTES
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb --clobber
-            gh release edit "$TAG" --title "C18 Power Menu 1.7.12 (roothide / arm64e)" --notes-file /tmp/notes.md
+            gh release edit "$TAG" --title "C18 Power Menu 1.7.13 (roothide / arm64e)" --notes-file /tmp/notes.md
           else
             gh release create "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb \
-              --title "C18 Power Menu 1.7.12 (roothide / arm64e)" --notes-file /tmp/notes.md
+              --title "C18 Power Menu 1.7.13 (roothide / arm64e)" --notes-file /tmp/notes.md
           fi
