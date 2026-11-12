@@ -253,9 +253,6 @@ static const CGFloat kRowHeight = 46.0;
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor clearColor];
-
-    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(backgroundTapped)];
-    [self.view addGestureRecognizer:tap];
 }
 
 - (void)addRowWithTitle:(NSString *)title
@@ -312,20 +309,6 @@ static const CGFloat kRowHeight = 46.0;
 
     [self.card.rows addObject:row];
     [self.card.blur.contentView addSubview:row];
-
-    if (destructive) {
-        UIView *stronger = [[UIView alloc] initWithFrame:CGRectZero];
-        stronger.userInteractionEnabled = NO;
-        stronger.backgroundColor = [UIColor colorWithWhite:1 alpha:0.06];
-        [row insertSubview:stronger atIndex:0];
-        stronger.translatesAutoresizingMaskIntoConstraints = NO;
-        [NSLayoutConstraint activateConstraints:@[
-            [stronger.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
-            [stronger.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
-            [stronger.topAnchor constraintEqualToAnchor:row.topAnchor],
-            [stronger.bottomAnchor constraintEqualToAnchor:row.bottomAnchor],
-        ]];
-    }
 }
 
 - (void)rowTapped:(UIButton *)sender {
@@ -352,6 +335,7 @@ static C18MenuViewController *g_menuVC = nil;
 
 static void C18HideMenu(void) {
     C18Log(@"hide menu");
+    [g_menuWindow resignKeyWindow];
     g_menuWindow.rootViewController = nil;
     g_menuWindow.hidden = YES;
     g_menuWindow = nil;
@@ -387,12 +371,15 @@ static BOOL C18ShowMenu(void) {
 
     UIVisualEffectView *backdrop = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
     backdrop.frame = screen;
+    backdrop.alpha = 0.5;
     backdrop.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [vc.view addSubview:backdrop];
 
     UIView *dim = [[UIView alloc] initWithFrame:screen];
-    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.18];
+    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.07];
     dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:vc action:@selector(backgroundTapped)];
+    [dim addGestureRecognizer:tap];
     [vc.view addSubview:dim];
 
     NSArray<NSDictionary *> *items = @[
@@ -405,8 +392,8 @@ static BOOL C18ShowMenu(void) {
         @{@"t": @"设备关机", @"g": @"power",                          @"a": @(C18PowerActionShutdown)},
     ];
 
-    CGFloat cardWidth = 268;
-    CGFloat cardHeight = kRowHeight * (items.count + 1);
+    CGFloat cardWidth = 200;
+    CGFloat cardHeight = kRowHeight * (items.count + 1) + 12;
     CGFloat right = screen.size.width - 12;
     CGFloat x = MIN(MAX(glyph.origin.x + glyph.size.width - cardWidth, 12), right - cardWidth);
     CGFloat y = glyph.origin.y + glyph.size.height + 8;
@@ -437,6 +424,7 @@ static BOOL C18ShowMenu(void) {
     window.backgroundColor = [UIColor clearColor];
     window.rootViewController = vc;
     window.hidden = NO;
+    [window makeKeyWindow];
 
     g_menuWindow = window;
     g_menuVC = vc;
