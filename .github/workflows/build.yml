@@ -84,25 +84,20 @@ jobs:
           ls -l dist/*.deb || { echo "no deb, skip release"; exit 0; }
           DEB=$(ls -t dist/*.deb | head -1)
           cp "$DEB" /tmp/C18PowerMenu_roothide_arm64e.deb
-          TAG="v1.3.4"
+          TAG="v1.4.0"
           cat > /tmp/notes.md <<'NOTES'
-          C18 Power Menu 1.3.4（roothide / arm64e）
+          C18 Power Menu 1.4.0（roothide / arm64e）
 
-          条目与尺寸照 CCBorder 的顶部操作按钮电源菜单重做：浅色圆角卡片、左侧粗体文字、右侧 SF 图标、底部红色“取消操作”，卡片贴电源按钮右边缘、在按钮下方展开。
+          自绘 UI 与全屏蒙版已全部删除。现在的菜单是系统的 UIMenu + UIAction，挂在按钮上由 UIKit 自己渲染（和 CCBorder 顶部操作按钮同一套做法），所以没有我们画的卡片和遮罩。
 
-          命令取自 CCBorder 二进制里的实际工具：
-          - 快速注销 → /usr/bin/sbreload
-          - 强制注销 → /usr/bin/killall -9 SpringBoard
-          - 重启桌面 → /usr/bin/killall SpringBoard
-          - 安全模式 → /usr/bin/killall -SEGV SpringBoard
-          - 重启空间 → /bin/launchctl reboot userspace
-          - 重启设备 → reboot
-          - 设备关机 → 原生的 presentPowerDownTransientOverlay
+          长按控制中心右上角电源图标弹出菜单：快速注销 / 强制注销 / 重启桌面 / 安全模式 / 重启空间 / 重启设备 / 设备关机 / 取消操作。
+
+          命令：sbreload、killall -9 SpringBoard、killall SpringBoard、killall -SEGV SpringBoard、launchctl reboot userspace、reboot，关机则调 SBLockScreenManager 的 presentPowerDownTransientOverlay。
           NOTES
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb --clobber
-            gh release edit "$TAG" --title "C18 Power Menu 1.3.4 (roothide / arm64e)" --notes-file /tmp/notes.md
+            gh release edit "$TAG" --title "C18 Power Menu 1.4.0 (roothide / arm64e)" --notes-file /tmp/notes.md
           else
             gh release create "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb \
-              --title "C18 Power Menu 1.3.4 (roothide / arm64e)" --notes-file /tmp/notes.md
+              --title "C18 Power Menu 1.4.0 (roothide / arm64e)" --notes-file /tmp/notes.md
           fi
