@@ -84,24 +84,21 @@ jobs:
           ls -l dist/*.deb || { echo "no deb, skip release"; exit 0; }
           DEB=$(ls -t dist/*.deb | head -1)
           cp "$DEB" /tmp/C18PowerMenu_roothide_arm64e.deb
-          TAG="v1.7.0"
+          TAG="v1.7.1"
           cat > /tmp/notes.md <<'NOTES'
-          C18 Power Menu 1.7.0（roothide / arm64e）
+          C18 Power Menu 1.7.1（roothide / arm64e）
 
-          修复三个问题：
-          1. 位置：系统私有的 _presentMenuAtLocation: 不认坐标（一直是屏幕居中），现改为自绘同款系统风格卡片，位置严格按 CC18 电源控件本身的 rect 计算（右边缘对齐按钮右边缘、顶部 = 按钮下缘 + 8，上方放不下就翻到按钮上方），横屏同样按控件定位。
-          2. 点击无效：不再走 UIMenu 的 handler，行内直接用 UIButton，点击后 posix_spawn 执行命令（sbreload / killall SpringBoard / killall -SEGV / launchctl reboot userspace / reboot / SBLockScreenManager 关机），并在执行前查 jbroot 下的可执行路径，找不到才回落 /usr/bin 绝对路径。
-          3. 二次长按失效：彻底不再用 UIContextMenuInteraction，没有交互复用与重入状态，重复长按每次都重新建卡片。
+          修复：
+          1. 条目点不动：菜单窗口没有成为 key window，触摸事件没路由进来；现弹出后 makeKeyWindow，关闭时 resignKeyWindow。取消行之前那层默认深色底已去掉。
+          2. 背景高斯模糊减半：全屏模糊层透明度 0.5，压暗层 0.18 -> 0.07，只保留轻微模糊。
+          3. 卡片宽度 268 -> 200（约缩 1/4）。
 
-          外观：UIBlurEffect（SystemChromeMaterial）毛玻璃 + 左文字右 SF 图标 + 细分割线 + 红色取消，全屏一层极淡的模糊遮罩。
-          图标：快速注销 rays / 强制注销 slowmo / 重启桌面 apps.iphone / 安全模式 shield.lefthalf.filled / 重启空间 arrow.clockwise.circle / 重启设备 exclamationmark.arrow.circlepath / 设备关机 power / 取消 trash。
-
-          诊断日志：/var/mobile/Library/C18PowerMenu.log（记录了 glyph 矩形、卡片坐标、每条命令的 spawn 结果）。
+          其余不变：锚定 CC18 右上角电源控件，左文字右 SF 图标，命令直接 posix_spawn；日志 /var/mobile/Library/C18PowerMenu.log。
           NOTES
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb --clobber
-            gh release edit "$TAG" --title "C18 Power Menu 1.7.0 (roothide / arm64e)" --notes-file /tmp/notes.md
+            gh release edit "$TAG" --title "C18 Power Menu 1.7.1 (roothide / arm64e)" --notes-file /tmp/notes.md
           else
             gh release create "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb \
-              --title "C18 Power Menu 1.7.0 (roothide / arm64e)" --notes-file /tmp/notes.md
+              --title "C18 Power Menu 1.7.1 (roothide / arm64e)" --notes-file /tmp/notes.md
           fi
