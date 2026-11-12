@@ -75,23 +75,27 @@ jobs:
           ls -l dist/*.deb || { echo "no deb, skip release"; exit 0; }
           DEB=$(ls -t dist/*.deb | head -1)
           cp "$DEB" /tmp/C18PowerMenu_roothide_arm64e.deb
-          TAG="v1.7.10"
+          TAG="v1.7.11"
           cat > /tmp/notes.md <<'NOTES'
-          C18 Power Menu 1.7.10 (roothide / arm64e)
+          C18 Power Menu 1.7.11 (roothide / arm64e)
 
-          Fixes for the three dead actions:
-          - 重启设备 = Reboot: now calls shutdownAndReboot:YES. The old call passed nil, which reads as NO and powered the device off.
-          - 设备关机 = Shutdown: shutdownAndReboot:NO, immediate power off.
-          - 重启空间 = RebootUserspace: resolves the real roothide jbroot first, then launchctl reboot userspace; falls back to ldrestart when the sandbox blocks the spawn.
-          - 安全模式 = SafeMode: killall -SEGV SpringBoard (same command CCRespring uses); if spawn is blocked it forces an in-process fault.
+          Userspace reboot now uses roothide's own path translation instead of a guessed /var/jb:
+          - loads libroothide.dylib and calls its exported const char *jbroot(const char *)
+          - launches the translated /usr/bin/launchctl reboot userspace, the exact same call CCRespring makes
+          - SpringBoard is unsandboxed by roothide, so the spawn is permitted once the path is right
 
-          Diagnostics: the log now records the resolved jbroot, every spawn candidate with its errno, and the FBSystemService selector dump.
+          Also in this build:
+          - 重启设备 = shutdownAndReboot:YES, 设备关机 = shutdownAndReboot:NO (the previous nil argument read as NO and powered off instead of rebooting)
+          - 安全模式 keeps killall -SEGV SpringBoard, plus an in-process forced fault if the spawn is refused
+          - the log records librootide load result, translated paths and every spawn rc
+
+          Note: this jailbreak has no Substrate-style safe mode catcher, so a SpringBoard crash simply reloads - the same reason CCRespring's SafeMode also does nothing.
           Log: /var/mobile/Library/C18PowerMenu.log
           NOTES
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb --clobber
-            gh release edit "$TAG" --title "C18 Power Menu 1.7.10 (roothide / arm64e)" --notes-file /tmp/notes.md
+            gh release edit "$TAG" --title "C18 Power Menu 1.7.11 (roothide / arm64e)" --notes-file /tmp/notes.md
           else
             gh release create "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb \
-              --title "C18 Power Menu 1.7.10 (roothide / arm64e)" --notes-file /tmp/notes.md
+              --title "C18 Power Menu 1.7.11 (roothide / arm64e)" --notes-file /tmp/notes.md
           fi
