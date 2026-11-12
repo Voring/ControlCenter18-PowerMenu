@@ -84,22 +84,27 @@ jobs:
           ls -l dist/*.deb || { echo "no deb, skip release"; exit 0; }
           DEB=$(ls -t dist/*.deb | head -1)
           cp "$DEB" /tmp/C18PowerMenu_roothide_arm64e.deb
-          TAG="v1.3.1"
+          TAG="v1.3.2"
           cat > /tmp/notes.md <<'NOTES'
-          C18 Power Menu 1.3.1（roothide / arm64e）
+          C18 Power Menu 1.3.2（roothide / arm64e）
 
-          1.3.0 的 CCRespring 路径已完全删除：单独 present 它的 CCUIMenuModuleViewController 只会触发它自己的注销，出不来它那层菜单。
+          长按控制中心电源键（CC18 的电源键只有长按会响应），弹出浅色圆角菜单：左侧粗体文字，右侧 SF Symbol 图标，底部红色“取消操作”，点卡片外部也可取消。
 
-          长按控制中心电源键（CC18 的电源键本来就只响应长按）：弹出插件自绘的深色圆角菜单，六项：注销 / 重启 / 关机 / 安全模式 / 软重启设备 / 重启用户空间；点卡片外部取消。
+          菜单项与命令：
+          - 快速注销 → killall SpringBoard
+          - 强制注销 → killall -9 SpringBoard
+          - 重启桌面 → ldrestart
+          - 安全模式 → killall -SEGV SpringBoard
+          - 重启空间 → launchctl reboot userspace
+          - 重启设备 → reboot
+          - 设备关机 → 原生的 presentPowerDownTransientOverlay
 
-          关机交回系统原生的 presentPowerDownTransientOverlay。
-
-          样式为初版自绘（暗色卡片 + 顶部点状图标 + 标题 + 带图标的行 + 细分隔线），等效果图来了再按图调。
+          1.3.0 的 CCRespring 路径已完全删除（单 present 它会直接触发注销）。
           NOTES
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb --clobber
-            gh release edit "$TAG" --title "C18 Power Menu 1.3.1 (roothide / arm64e)" --notes-file /tmp/notes.md
+            gh release edit "$TAG" --title "C18 Power Menu 1.3.2 (roothide / arm64e)" --notes-file /tmp/notes.md
           else
             gh release create "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb \
-              --title "C18 Power Menu 1.3.1 (roothide / arm64e)" --notes-file /tmp/notes.md
+              --title "C18 Power Menu 1.3.2 (roothide / arm64e)" --notes-file /tmp/notes.md
           fi

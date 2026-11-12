@@ -1,6 +1,6 @@
 // C18PowerMenu - Power menu for ControlCenter18 (iOS 16 / 17, roothide)
 // ControlCenter18's power button only reacts to a long press; the hook below is
-// that long-press entry point and shows our own menu (no third-party controller).
+// that long-press entry point and shows our own menu.
 
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -14,12 +14,14 @@ extern char **environ;
 typedef void (*PresentIMP)(id, SEL);
 
 typedef NS_ENUM(NSInteger, C18PowerAction) {
-    C18PowerActionRespring = 0,
-    C18PowerActionReboot,
-    C18PowerActionShutdown,
-    C18PowerActionSafeMode,
-    C18PowerActionLdRestart,
-    C18PowerActionUserspaceReboot,
+    C18PowerActionSoftRespring = 0,   // 快速注销
+    C18PowerActionHardRespring,       // 强制注销
+    C18PowerActionRestartDesktop,     // 重启桌面
+    C18PowerActionSafeMode,           // 安全模式
+    C18PowerActionUserspaceReboot,    // 重启空间
+    C18PowerActionReboot,             // 重启设备
+    C18PowerActionShutdown,           // 设备关机
+    C18PowerActionCancel,             // 取消操作
 };
 
 static PresentIMP g_orig[16];
@@ -76,12 +78,14 @@ static void C18Spawn(NSString *relative, NSArray<NSString *> *args) {
 
 static void C18RunAction(C18PowerAction action, PresentIMP original, id target, SEL cmd) {
     switch (action) {
-        case C18PowerActionRespring:   C18Spawn(@"/usr/bin/killall", @[@"-9", @"SpringBoard"]); break;
-        case C18PowerActionReboot:     C18Spawn(@"/usr/bin/reboot", @[]); break;
-        case C18PowerActionShutdown:   if (original) original(target, cmd); break;
-        case C18PowerActionSafeMode:   C18Spawn(@"/usr/bin/killall", @[@"-SEGV", @"SpringBoard"]); break;
-        case C18PowerActionLdRestart:  C18Spawn(@"/usr/bin/ldrestart", @[]); break;
+        case C18PowerActionSoftRespring:  C18Spawn(@"/usr/bin/killall", @[@"SpringBoard"]); break;
+        case C18PowerActionHardRespring:  C18Spawn(@"/usr/bin/killall", @[@"-9", @"SpringBoard"]); break;
+        case C18PowerActionRestartDesktop:C18Spawn(@"/usr/bin/ldrestart", @[]); break;
+        case C18PowerActionSafeMode:      C18Spawn(@"/usr/bin/killall", @[@"-SEGV", @"SpringBoard"]); break;
         case C18PowerActionUserspaceReboot: C18Spawn(@"/usr/bin/launchctl", @[@"reboot", @"userspace"]); break;
+        case C18PowerActionReboot:        C18Spawn(@"/usr/bin/reboot", @[]); break;
+        case C18PowerActionShutdown:      if (original) original(target, cmd); break;
+        case C18PowerActionCancel:        break;
     }
 }
 
@@ -89,150 +93,124 @@ static void C18RunAction(C18PowerAction action, PresentIMP original, id target, 
 
 static NSArray<NSDictionary *> *C18MenuItems(void) {
     return @[
-        @{@"title": @"注销",         @"glyph": @"power",                          @"action": @(C18PowerActionRespring)},
-        @{@"title": @"重启",         @"glyph": @"arrow.clockwise",                @"action": @(C18PowerActionReboot)},
-        @{@"title": @"关机",         @"glyph": @"power",                          @"action": @(C18PowerActionShutdown)},
-        @{@"title": @"安全模式",     @"glyph": @"exclamationmark.triangle",        @"action": @(C18PowerActionSafeMode)},
-        @{@"title": @"软重启设备",   @"glyph": @"arrow.triangle.2.circlepath",    @"action": @(C18PowerActionLdRestart)},
-        @{@"title": @"重启用户空间", @"glyph": @"arrow.uturn.left.circle",        @"action": @(C18PowerActionUserspaceReboot)},
+        @{@"title": @"快速注销", @"glyph": @"circle.dashed",              @"action": @(C18PowerActionSoftRespring)},
+        @{@"title": @"强制注销", @"glyph": @"circle.dashed.inset.filled",  @"action": @(C18PowerActionHardRespring)},
+        @{@"title": @"重启桌面", @"glyph": @"rectangle.on.rectangle",      @"action": @(C18PowerActionRestartDesktop)},
+        @{@"title": @"安全模式", @"glyph": @"shield.lefthalf.filled",      @"action": @(C18PowerActionSafeMode)},
+        @{@"title": @"重启空间", @"glyph": @"arrow.clockwise.circle",      @"action": @(C18PowerActionUserspaceReboot)},
+        @{@"title": @"重启设备", @"glyph": @"exclamationmark.arrow.circlepath", @"action": @(C18PowerActionReboot)},
+        @{@"title": @"设备关机", @"glyph": @"power",                       @"action": @(C18PowerActionShutdown)},
+        @{@"title": @"取消操作", @"glyph": @"trash",                       @"action": @(C18PowerActionCancel)},
     ];
 }
 
 static UIImage *C18Glyph(NSString *name, CGFloat point) {
-    UIImageConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:point weight:UIImageSymbolWeightMedium];
+    UIImageConfiguration *cfg = [UIImageSymbolConfiguration configurationWithPointSize:point weight:UIImageSymbolWeightSemibold];
     UIImage *img = [UIImage systemImageNamed:name withConfiguration:cfg];
     if (!img) img = [UIImage systemImageNamed:@"circle" withConfiguration:cfg];
     return [img imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
 }
 
-#pragma mark - Menu view controller (self drawn)
+#pragma mark - Menu view controller (light card, label left / SF glyph right)
 
-@interface C18MenuViewController : UIViewController <UITableViewDataSource, UITableViewDelegate>
-@property (nonatomic, copy) NSArray<NSDictionary *> *items;
+@interface C18MenuViewController : UIViewController
 @property (nonatomic, copy) void (^handler)(C18PowerAction);
 @property (nonatomic, strong) UIVisualEffectView *blur;
 @property (nonatomic, strong) UIView *card;
-@property (nonatomic, strong) UITableView *table;
 @end
 
 @implementation C18MenuViewController
+
+static const CGFloat kRowHeight = 58.0;
+static const CGFloat kSideInset = 18.0;
 
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor clearColor];
     self.modalPresentationStyle = UIModalPresentationOverFullScreen;
     self.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
-    self.items = C18MenuItems();
 
-    UIBlurEffect *effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleDark];
+    UIBlurEffect *effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialLight];
     self.blur = [[UIVisualEffectView alloc] initWithEffect:effect];
     self.blur.frame = self.view.bounds;
     self.blur.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:self.blur];
 
     UIView *dim = [[UIView alloc] initWithFrame:self.view.bounds];
-    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.28];
+    dim.backgroundColor = [UIColor colorWithWhite:1 alpha:0.18];
     dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:dim];
 
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(dismissSelf)];
     [dim addGestureRecognizer:tap];
 
-    CGFloat cardWidth = MIN(CGRectGetWidth(self.view.bounds) - 44, 372);
-    CGFloat rowHeight = 56;
-    CGFloat headerHeight = 96;
-    CGFloat cardHeight = headerHeight + rowHeight * self.items.count;
+    NSArray<NSDictionary *> *items = C18MenuItems();
+    CGFloat cardWidth = MIN(CGRectGetWidth(self.view.bounds) * 0.62, 300);
+    CGFloat cardHeight = kRowHeight * items.count;
 
     self.card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, cardWidth, cardHeight)];
-    self.card.center = CGPointMake(CGRectGetMidX(self.view.bounds), CGRectGetMidY(self.view.bounds));
-    self.card.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin |
-                                 UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
-    self.card.backgroundColor = [UIColor colorWithWhite:0.08 alpha:0.72];
-    self.card.layer.cornerRadius = 36;
+    self.card.backgroundColor = [UIColor colorWithWhite:0.96 alpha:0.97];
+    self.card.layer.cornerRadius = 20;
     self.card.layer.cornerCurve = kCACornerCurveContinuous;
     self.card.layer.masksToBounds = YES;
     [self.view addSubview:self.card];
 
-    UIImageView *glyph = [[UIImageView alloc] initWithImage:C18Glyph(@"circle.dotted", 24)];
-    glyph.tintColor = [UIColor whiteColor];
-    glyph.contentMode = UIViewContentModeScaleAspectFit;
-    glyph.frame = CGRectMake(0, 22, cardWidth, 24);
-    glyph.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [self.card addSubview:glyph];
+    for (NSUInteger i = 0; i < items.count; i++) {
+        NSDictionary *item = items[i];
+        C18PowerAction action = (C18PowerAction)[item[@"action"] integerValue];
+        BOOL isCancel = (action == C18PowerActionCancel);
+        UIColor *tint = isCancel ? [UIColor systemRedColor] : [UIColor blackColor];
 
-    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(0, 54, cardWidth, 26)];
-    title.text = @"电源";
-    title.font = [UIFont systemFontOfSize:20 weight:UIFontWeightBold];
-    title.textColor = [UIColor whiteColor];
-    title.textAlignment = NSTextAlignmentCenter;
-    title.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [self.card addSubview:title];
+        UIControl *row = [[UIControl alloc] initWithFrame:CGRectMake(0, kRowHeight * i, cardWidth, kRowHeight)];
+        row.tag = (NSInteger)action;
+        [row addTarget:self action:@selector(rowTapped:) forControlEvents:UIControlEventTouchUpInside];
 
-    UIView *hairline = [[UIView alloc] initWithFrame:CGRectMake(0, headerHeight - 0.5, cardWidth, 0.5)];
-    hairline.backgroundColor = [UIColor colorWithWhite:1 alpha:0.14];
-    hairline.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [self.card addSubview:hairline];
+        UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(kSideInset, 0, cardWidth - kSideInset * 2 - 34, kRowHeight)];
+        label.text = item[@"title"];
+        label.font = [UIFont systemFontOfSize:19 weight:UIFontWeightBold];
+        label.textColor = tint;
+        label.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+        [row addSubview:label];
 
-    self.table = [[UITableView alloc] initWithFrame:CGRectMake(0, headerHeight, cardWidth, rowHeight * self.items.count)
-                                                  style:UITableViewStylePlain];
-    self.table.backgroundColor = [UIColor clearColor];
-    self.table.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
-    self.table.separatorColor = [UIColor colorWithWhite:1 alpha:0.12];
-    self.table.separatorInset = UIEdgeInsetsZero;
-    self.table.scrollEnabled = NO;
-    self.table.dataSource = self;
-    self.table.delegate = self;
-    self.table.rowHeight = rowHeight;
-    self.table.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [self.card addSubview:self.table];
+        UIImageView *icon = [[UIImageView alloc] initWithImage:C18Glyph(item[@"glyph"], 20)];
+        icon.tintColor = tint;
+        icon.contentMode = UIViewContentModeScaleAspectFit;
+        icon.frame = CGRectMake(cardWidth - kSideInset - 24, (kRowHeight - 26) / 2, 24, 26);
+        icon.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
+        [row addSubview:icon];
+
+        if (i + 1 < items.count) {
+            UIView *line = [[UIView alloc] initWithFrame:CGRectMake(0, kRowHeight - 0.5, cardWidth, 0.5)];
+            line.backgroundColor = [UIColor colorWithWhite:0 alpha:0.12];
+            line.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+            [row addSubview:line];
+        }
+
+        [self.card addSubview:row];
+    }
+
+    [self layoutCard];
+}
+
+- (void)layoutCard {
+    CGSize size = self.card.bounds.size;
+    CGFloat safeTop = self.view.safeAreaInsets.top;
+    CGFloat top = (safeTop > 0 ? safeTop : 44) + 40;
+    self.card.frame = CGRectMake((CGRectGetWidth(self.view.bounds) - size.width) / 2, top, size.width, size.height);
 }
 
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     self.blur.frame = self.view.bounds;
-    CGFloat cardWidth = MIN(CGRectGetWidth(self.view.bounds) - 44, 372);
-    CGFloat rowHeight = 56;
-    CGFloat headerHeight = 96;
-    CGRect f = self.card.frame;
-    f.size = CGSizeMake(cardWidth, headerHeight + rowHeight * self.items.count);
-    f.origin = CGPointMake((CGRectGetWidth(self.view.bounds) - f.size.width) / 2,
-                           (CGRectGetHeight(self.view.bounds) - f.size.height) / 2);
-    self.card.frame = f;
-    self.table.frame = CGRectMake(0, headerHeight, f.size.width, rowHeight * self.items.count);
+    [self layoutCard];
 }
 
 - (void)dismissSelf {
     [self dismissViewControllerAnimated:YES completion:nil];
 }
 
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    return self.items.count;
-}
-
-- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    static NSString *cid = @"c18row";
-    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:cid];
-    if (!cell) {
-        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:cid];
-        cell.backgroundColor = [UIColor clearColor];
-        cell.contentView.backgroundColor = [UIColor clearColor];
-        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
-        UIView *sel = [[UIView alloc] init];
-        sel.backgroundColor = [UIColor colorWithWhite:1 alpha:0.08];
-        cell.selectedBackgroundView = sel;
-        cell.textLabel.textColor = [UIColor whiteColor];
-        cell.textLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightMedium];
-        cell.imageView.tintColor = [UIColor whiteColor];
-    }
-    NSDictionary *item = self.items[indexPath.row];
-    cell.textLabel.text = item[@"title"];
-    cell.imageView.image = C18Glyph(item[@"glyph"], 22);
-    return cell;
-}
-
-- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    C18PowerAction action = (C18PowerAction)[self.items[indexPath.row][@"action"] integerValue];
+- (void)rowTapped:(UIControl *)sender {
+    C18PowerAction action = (C18PowerAction)sender.tag;
     void (^handler)(C18PowerAction) = self.handler;
     [self dismissViewControllerAnimated:YES completion:^{
         if (handler) {
