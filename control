@@ -1,6 +1,6 @@
 Package: com.iosdump.c18powermenu
 Name: C18 Power Menu
-Version: 1.7.7
+Version: 1.7.8
 Architecture: iphoneos-arm64e
 Description: 长按 ControlCenter18 控制中心右上角电源按钮，在按钮下方弹出与系统菜单同款的毛玻璃卡片（文字在左、SF 图标在右）：快速注销 / 重启桌面 / 安全模式 / 重启空间 / 重启设备 / 设备关机 / 取消操作。
 Maintainer: Voring

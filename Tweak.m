@@ -226,7 +226,7 @@ static const CGFloat kRowHeight = 46.0;
 // Backdrop: one full-strength *adaptive* system material and no manual dim.
 // The adaptive style follows light/dark mode by itself, so light mode stays
 // light and dark mode gets its own darkening from the material - we never add
-// a black overlay on top of it.
+// a black overlay on top of it. UltraThin keeps the blur gentle without graying.
 static const CGFloat kBackdropAlpha = 1.0;
 static const CGFloat kDimAlpha = 0.0;   // no dimming at all
 static const CGFloat kNudgeX = 11.5;   // half a row left, a quarter row back right
@@ -433,7 +433,7 @@ static BOOL C18ShowMenu(void) {
     UIView *overlay = [[UIView alloc] initWithFrame:screen];
     overlay.backgroundColor = [UIColor clearColor];
 
-    UIVisualEffectView *backdrop = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterial]];
+    UIVisualEffectView *backdrop = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterial]];
     backdrop.frame = screen;
     backdrop.alpha = kBackdropAlpha;
     backdrop.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -519,8 +519,10 @@ static BOOL C18ShowMenu(void) {
         C18HideMenu();
     };
 
-    // Pop-in: the card scales up while the backdrop fades in.
-    card.transform = CGAffineTransformMakeScale(0.86, 0.86);
+    // Drop-down: the card starts a bit higher and smaller, then slides down
+    // into place while the backdrop fades in.
+    card.transform = CGAffineTransformConcat(CGAffineTransformMakeScale(0.92, 0.92),
+                                                 CGAffineTransformMakeTranslation(0, -18));
     card.alpha = 0;
     circle.alpha = 0;
     backdrop.alpha = 0;
