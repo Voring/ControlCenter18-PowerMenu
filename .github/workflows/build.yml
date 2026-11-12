@@ -75,20 +75,20 @@ jobs:
           ls -l dist/*.deb || { echo "no deb, skip release"; exit 0; }
           DEB=$(ls -t dist/*.deb | head -1)
           cp "$DEB" /tmp/C18PowerMenu_roothide_arm64e.deb
-          TAG="v1.7.5"
+          TAG="v1.7.6"
           cat > /tmp/notes.md <<'NOTES'
-          C18 Power Menu 1.7.5 (roothide / arm64e)
+          C18 Power Menu 1.7.6 (roothide / arm64e)
 
-          1. Floating power button moved down half a row, clear of the card edge.
-          2. Background blur raised by a quarter (0.75 -> 0.94); dim stays 0.12.
-          3. Removed the 强制注销 row: it did exactly what 快速注销 does (both restart SpringBoard), menu is now 6 rows + cancel.
+          1. Card and floating power button both moved a quarter row to the right.
+          2. Backdrop blur redone to match how iOS does its context menus: one full-strength SystemThinMaterialDark layer (alpha 1.0) and only a 0.06 dim, instead of the half-transparent blur plus heavy dim we had. No more hand-tuned half values.
+          3. Row SF symbols reduced 16 -> 14 pt (20 pt box).
 
           Log: /var/mobile/Library/C18PowerMenu.log
           NOTES
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb --clobber
-            gh release edit "$TAG" --title "C18 Power Menu 1.7.5 (roothide / arm64e)" --notes-file /tmp/notes.md
+            gh release edit "$TAG" --title "C18 Power Menu 1.7.6 (roothide / arm64e)" --notes-file /tmp/notes.md
           else
             gh release create "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb \
-              --title "C18 Power Menu 1.7.5 (roothide / arm64e)" --notes-file /tmp/notes.md
+              --title "C18 Power Menu 1.7.6 (roothide / arm64e)" --notes-file /tmp/notes.md
           fi
