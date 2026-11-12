@@ -29,21 +29,23 @@ jobs:
           git push origin HEAD:main || true
 
       - name: Install Theos (roothide) + iOS 16.5 SDK
-        continue-on-error: true
         run: |
           set -x
           exec > >(tee install-log.txt) 2>&1
-          brew install ldid xz
+          brew install ldid xz || true
           rm -rf "$GITHUB_WORKSPACE/theos"
           git clone --recursive --depth 1 https://github.com/roothide/theos.git "$GITHUB_WORKSPACE/theos"
           mkdir -p "$GITHUB_WORKSPACE/theos/sdks"
-          SDK_URL=$(curl -sL https://api.github.com/repos/theos/sdks/releases/latest | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(a['browser_download_url'] for a in d['assets'] if a['name']=='iPhoneOS16.5.sdk.tar.xz'))")
-          echo "SDK: $SDK_URL"
-          curl -L --fail -o /tmp/sdk.tar.xz "$SDK_URL"
+          SDK_URL="https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz"
+          if ! curl -L --fail -o /tmp/sdk.tar.xz "$SDK_URL"; then
+            SDK_URL=$(curl -sfL https://api.github.com/repos/theos/sdks/releases/latest | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(a['browser_download_url'] for a in d.get('assets',[]) if a['name']=='iPhoneOS16.5.sdk.tar.xz'))")
+            curl -L --fail -o /tmp/sdk.tar.xz "$SDK_URL"
+          fi
           tar -xf /tmp/sdk.tar.xz -C "$GITHUB_WORKSPACE/theos/sdks"
+          ls "$GITHUB_WORKSPACE/theos/sdks"
+          test -d "$GITHUB_WORKSPACE/theos/sdks/iPhoneOS16.5.sdk"
 
       - name: Build arm64e roothide
-        continue-on-error: true
         env:
           THEOS: ${{ github.workspace }}/theos
         run: |
@@ -52,8 +54,8 @@ jobs:
           rm -rf packages dist
           make clean || true
           make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide ARCHS=arm64e
-          ls -l packages || true
-          mkdir -p dist && cp packages/*.deb dist/ 2>/dev/null || true
+          ls -l packages
+          mkdir -p dist && cp packages/*.deb dist/
 
       - name: Commit logs and deb
         if: always()
