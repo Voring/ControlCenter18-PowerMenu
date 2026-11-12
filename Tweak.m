@@ -1,5 +1,6 @@
 // C18PowerMenu - Power menu for ControlCenter18 (iOS 16 / 17, roothide)
-// Replaces the Control Center power button action with a native-looking menu.
+// Short press on the CC power button -> our native menu.
+// Long press -> CCRespring's own expanded menu, if it is installed.
 
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -21,13 +22,13 @@ typedef NS_ENUM(NSInteger, C18PowerAction) {
     C18PowerActionUserspaceReboot,
 };
 
-typedef void (*AddActionIMP)(id, SEL, NSString *, UIImage *, void (^)(void));
-
 static PresentIMP g_orig[16];
 static Class g_cls[16];
 static int g_count = 0;
 static BOOL g_presenting = NO;
 static UIWindow *g_fallbackWindow = nil;
+static CFAbsoluteTime g_suppressTapUntil = 0;
+static char kC18LongPressKey;
 
 #pragma mark - Path helpers
 
@@ -118,65 +119,40 @@ static UIViewController *C18FallbackViewController(void) {
     return root;
 }
 
-static UIImage *C18Glyph(NSString *name) {
-    UIImage *img = [UIImage systemImageNamed:name];
-    if (!img) img = [UIImage systemImageNamed:@"circle"];
-    return [img imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+#pragma mark - CCRespring menu
+
+// CCRespring installs into the same jbroot; its class is only registered once the
+// bundle binary is loaded, so try NSClassFromString first and dlopen as a fallback.
+static Class C18RespringMenuClass(void) {
+    Class cls = NSClassFromString(@"CCRespringCCUIMenuModuleViewController");
+    if (cls) return cls;
+
+    NSString *bin = [C18JBRoot() stringByAppendingPathComponent:@"Library/ControlCenter/Bundles/CCRespring.bundle/CCRespring"];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:bin]) {
+        dlopen(bin.UTF8String, RTLD_NOW);
+        cls = NSClassFromString(@"CCRespringCCUIMenuModuleViewController");
+    }
+    return cls;
 }
 
-#pragma mark - Native ControlCenterUIKit menu module
+static UIViewController *C18MakeRespringMenu(void) {
+    Class cls = C18RespringMenuClass();
+    if (!cls) return nil;
 
-static BOOL C18PresentNativeMenu(UIViewController *host, id target, SEL cmd, PresentIMP original) {
-    Class menuCls = NSClassFromString(@"CCUIMenuModuleViewController");
-    if (!menuCls) return NO;
-
-    NSArray<NSString *> *titles = @[@"注销", @"重启", @"关机", @"安全模式", @"软重启设备", @"重启用户空间"];
-    NSArray<NSString *> *symbols = @[@"arrow.triangle.2.circlepath", @"power", @"power.circle",
-                                     @"arrow.2.circlepath", @"circle.dotted", @"power.circle.fill"];
-    NSArray<NSNumber *> *actions = @[@(C18PowerActionRespring), @(C18PowerActionReboot),
-                                     @(C18PowerActionShutdown), @(C18PowerActionSafeMode),
-                                     @(C18PowerActionLdRestart), @(C18PowerActionUserspaceReboot)];
-
-    id menu = nil;
     @try {
-        menu = [[menuCls alloc] init];
-        if (![menu respondsToSelector:@selector(addActionWithTitle:glyph:handler:)]) return NO;
-
-        [menu setValue:@"电源" forKey:@"title"];
-        if ([menu respondsToSelector:@selector(setGlyphImage:)]) {
-            [menu performSelector:@selector(setGlyphImage:) withObject:C18Glyph(@"circle.dotted")];
-        }
-        if ([menu respondsToSelector:@selector(setSelectedGlyphImage:)]) {
-            [menu performSelector:@selector(setSelectedGlyphImage:) withObject:C18Glyph(@"circle.dotted")];
-        }
-
-        SEL addSel = @selector(addActionWithTitle:glyph:handler:);
-        AddActionIMP add = (AddActionIMP)[menu methodForSelector:addSel];
-        if (!add) return NO;
-
-        for (NSUInteger i = 0; i < titles.count; i++) {
-            C18PowerAction action = (C18PowerAction)actions[i].integerValue;
-            UIImage *glyph = C18Glyph(symbols[i]);
-            add(menu, addSel, titles[i], glyph, ^{
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                    C18RunAction(action, original, target, cmd);
-                });
-            });
-        }
-
-        UIViewController *vc = (UIViewController *)menu;
+        UIViewController *vc = [(UIViewController *)[cls alloc] init];
+        if (![vc isKindOfClass:[UIViewController class]]) return nil;
         vc.modalPresentationStyle = UIModalPresentationOverFullScreen;
         vc.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
-        [host presentViewController:vc animated:YES completion:nil];
-        return YES;
+        return vc;
     } @catch (__unused NSException *e) {
-        return NO;
+        return nil;
     }
 }
 
-#pragma mark - Fallback alert
+#pragma mark - Menu
 
-static void C18PresentFallback(UIViewController *host, id target, SEL cmd, PresentIMP original) {
+static void C18PresentAlert(UIViewController *host, id target, SEL cmd, PresentIMP original) {
     UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"电源"
                                                                   message:nil
                                                            preferredStyle:UIAlertControllerStyleAlert];
@@ -214,14 +190,38 @@ static void C18ShowPowerMenu(id target, SEL cmd, PresentIMP original) {
     }
 
     g_presenting = YES;
-
-    if (!C18PresentNativeMenu(host, target, cmd, original)) {
-        C18PresentFallback(host, target, cmd, original);
-    }
+    C18PresentAlert(host, target, cmd, original);
 
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         g_presenting = NO;
     });
+}
+
+// Long press: show CCRespring's own menu; if it is not installed, fall back to ours.
+static void C18ShowRespringMenu(id target, SEL cmd, PresentIMP original) {
+    if (g_presenting) return;
+
+    UIViewController *host = C18TopViewController();
+    if (!host) host = C18FallbackViewController();
+
+    UIViewController *menu = host ? C18MakeRespringMenu() : nil;
+    if (menu) {
+        g_presenting = YES;
+        g_suppressTapUntil = CFAbsoluteTimeGetCurrent() + 1.2;
+        [host presentViewController:menu animated:YES completion:^{
+            if (host.presentedViewController != menu) {
+                // CCRespring's module expects a CC container; fall back if it did not present.
+                g_presenting = NO;
+                C18PresentAlert(host, target, cmd, original);
+            }
+        }];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            g_presenting = NO;
+        });
+        return;
+    }
+
+    C18ShowPowerMenu(target, cmd, original);
 }
 
 #pragma mark - Hook
@@ -236,6 +236,11 @@ static PresentIMP C18OriginalFor(id object) {
 static void C18PowerMenuHook(id self, SEL cmd) {
     PresentIMP original = C18OriginalFor(self);
 
+    if (CFAbsoluteTimeGetCurrent() < g_suppressTapUntil) {
+        // The long-press gesture already opened CCRespring's menu.
+        return;
+    }
+
     if (![NSThread isMainThread]) {
         dispatch_async(dispatch_get_main_queue(), ^{
             C18PowerMenuHook(self, cmd);
@@ -248,6 +253,54 @@ static void C18PowerMenuHook(id self, SEL cmd) {
     } @catch (__unused NSException *exception) {
         if (original) original(self, cmd);
     }
+}
+
+#pragma mark - Long press on the CC18 power glyph
+
+static void C18LongPressRecognized(id self, SEL _cmd, UILongPressGestureRecognizer *g) {
+    if (g.state != UIGestureRecognizerStateBegan) return;
+    g_suppressTapUntil = CFAbsoluteTimeGetCurrent() + 1.2;
+    C18ShowRespringMenu(nil, NULL, NULL);
+}
+
+static void C18DidMoveToWindowHook(id self, SEL cmd) {
+    VoidIMP orig = (VoidIMP)[self methodForSelector:@selector(c18_originalDidMoveToWindow)];
+    if (orig) orig(self, @selector(c18_originalDidMoveToWindow));
+
+    if (!objc_getAssociatedObject(self, &kC18LongPressKey)) {
+        UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(c18_longPress:)];
+        lp.minimumPressDuration = 0.55;
+        [(UIView *)self addGestureRecognizer:lp];
+        objc_setAssociatedObject(self, &kC18LongPressKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+}
+
+static void C18InstallGlyphGesture(void) {
+    int num = objc_getClassList(NULL, 0);
+    if (num <= 0) return;
+
+    Class *classes = (Class *)malloc(sizeof(Class) * num);
+    num = objc_getClassList(classes, num);
+
+    for (int i = 0; i < num; i++) {
+        const char *name = class_getName(classes[i]);
+        if (!name) continue;
+        if (!strstr(name, "C18PowerGlyph")) continue;
+        if (![(id)classes[i] isSubclassOfClass:[UIView class]]) continue;
+
+        SEL origSel = @selector(didMoveToWindow);
+        SEL swizSel = @selector(c18_originalDidMoveToWindow);
+        Method origM = class_getInstanceMethod(classes[i], origSel);
+        if (!origM) continue;
+        if (method_getImplementation(origM) == (IMP)C18DidMoveToWindowHook) continue;
+
+        class_addMethod(classes[i], swizSel, method_getImplementation(origM), method_getTypeEncoding(origM));
+        method_setImplementation(origM, (IMP)C18DidMoveToWindowHook);
+
+        class_addMethod(classes[i], @selector(c18_longPress:), (IMP)C18LongPressRecognized, "v@:@");
+    }
+
+    free(classes);
 }
 
 static BOOL C18ClassImplements(Class cls, SEL sel) {
@@ -291,9 +344,12 @@ static void C18InstallHooks(void) {
 __attribute__((constructor)) static void C18PowerMenuInit(void) {
     @autoreleasepool {
         C18InstallHooks();
+        C18InstallGlyphGesture();
+
         if (g_count == 0) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 if (g_count == 0) C18InstallHooks();
+                C18InstallGlyphGesture();
             });
         }
     }
