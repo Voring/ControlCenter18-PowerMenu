@@ -83,22 +83,24 @@ jobs:
           ls -l dist/*.deb || { echo "no deb, skip release"; exit 0; }
           DEB=$(ls -t dist/*.deb | head -1)
           cp "$DEB" /tmp/C18PowerMenu_roothide_arm64e.deb
-          TAG="v1.2.0"
+          TAG="v1.3.0"
           cat > /tmp/notes.md <<'NOTES'
-          C18 Power Menu 1.2.0（roothide / arm64e）
+          C18 Power Menu 1.3.0（roothide / arm64e）——取代 1.2.0
 
-          长按控制中心电源键：弹出原生 UIAlertController 菜单，六项：注销 / 重启 / 关机 / 安全模式 / 软重启设备 / 重启用户空间，外加取消。
+          只保留长按：ControlCenter18 的电源按钮本身只响应长按，短按是防误触空操作，本版已彻底移除短按分支。
 
-          注：ControlCenter18 的电源按钮本身只响应长按，短按是防误触空操作。
+          长按后：若已安装 CCRespring，直接实例化它的 CCRespringCCUIMenuModuleViewController，弹它自己的菜单；如果它呈现为空（需要 CC 模块容器），自动回退到我们的 UIAlertController 列表。
 
-          关机仍交回系统原生的 presentPowerDownTransientOverlay。
+          菜单项：注销 / 重启 / 关机 / 安全模式 / 软重启设备 / 重启用户空间（外加取消）；关机交回系统原生的 presentPowerDownTransientOverlay。
+
+          1.2.0 的问题：短按/长按双分支实际无效（短按根本不触发），以及呈现 CCUIMenuModuleViewController 时留透明视图抢点击，本版已移除。
 
           构建：macos-15-intel + roothide Theos + iPhoneOS 16.5 SDK，THEOS_PACKAGE_SCHEME=roothide，ARCHS=arm64e。
           NOTES
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb --clobber
-            gh release edit "$TAG" --title "C18 Power Menu 1.2.0 (roothide / arm64e)" --notes-file /tmp/notes.md
+            gh release edit "$TAG" --title "C18 Power Menu 1.3.0 (roothide / arm64e)" --notes-file /tmp/notes.md
           else
             gh release create "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb \
-              --title "C18 Power Menu 1.2.0 (roothide / arm64e)" --notes-file /tmp/notes.md
+              --title "C18 Power Menu 1.3.0 (roothide / arm64e)" --notes-file /tmp/notes.md
           fi
