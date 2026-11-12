@@ -1,6 +1,6 @@
 Package: com.iosdump.c18powermenu
 Name: C18 Power Menu
-Version: 1.7.13
+Version: 1.7.14
 Architecture: iphoneos-arm64e
 Description: 长按 ControlCenter18 控制中心右上角电源按钮，在按钮正下方弹出系统同款毛玻璃菜单（左文字、右 SF 图标）：快速注销 / 重启空间 / 安全模式 / 重启设备 / 设备关机 / 取消操作（重启设备与关机需二次确认）。适配 roothide 隐根 Dopamine、iOS 16–17、arm64e。
 Maintainer: Voring

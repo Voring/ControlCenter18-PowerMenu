@@ -499,6 +499,7 @@ static const CGFloat kNudgeY = 23.0;   // half a row down
 @interface C18MenuViewController : UIViewController
 @property (nonatomic, strong) C18MenuCard *card;
 @property (nonatomic, strong) C18MenuCard *confirmCard;
+@property (nonatomic, strong) UIView *confirmShield;
 @property (nonatomic, strong) UIView *overlayView;
 @property (nonatomic, copy) void (^onDismiss)(void);
 - (void)askConfirmForTitle:(NSString *)title action:(C18PowerAction)action;
@@ -631,25 +632,32 @@ static const CGFloat kNudgeY = 23.0;   // half a row down
 }
 
 - (void)dismissConfirm {
+    UIView *shield = self.confirmShield;
+    self.confirmShield = nil;
     [UIView animateWithDuration:0.16 animations:^{
         self.confirmCard.alpha = 0;
         self.confirmCard.transform = CGAffineTransformMakeScale(0.94, 0.94);
+        shield.alpha = 0;
     } completion:^(BOOL finished) {
         [self.confirmCard removeFromSuperview];
+        [shield removeFromSuperview];
         self.confirmCard = nil;
     }];
 }
 
 // Second factor for the two irreversible rows. Same material, same row
-// anatomy; it simply sits above the menu card and taps outside cancel it.
+// anatomy; it sits at the menu's own x so the two line up vertically, and a
+// transparent shield keeps the menu underneath untouchable while it is up.
 - (void)askConfirmForTitle:(NSString *)title action:(C18PowerAction)action {
     if (self.confirmCard || !self.overlayView) return;
 
-    CGFloat width = 200;
+    CGFloat width = self.card.bounds.size.width;
     CGFloat height = kRowHeight * 3;
     CGRect screen = self.overlayView.bounds;
+    // Same x as the menu so the two cards line up on the right edge; vertically
+    // centred, so it reads as a modal question rather than a third menu row.
     C18MenuCard *confirm = [[C18MenuCard alloc] initWithFrame:
-        CGRectMake((screen.size.width - width) / 2, (screen.size.height - height) / 2, width, height)];
+        CGRectMake(self.card.frame.origin.x, (screen.size.height - height) / 2, width, height)];
 
     UIView *titleRow = [[UIView alloc] initWithFrame:CGRectZero];
     titleRow.backgroundColor = [UIColor clearColor];
@@ -670,12 +678,24 @@ static const CGFloat kNudgeY = 23.0;   // half a row down
 
     C18MenuCard *saved = self.card;
     self.card = confirm;
-    [self addRowWithTitle:@"确认" glyph:@"checkmark" destructive:(action == C18PowerActionShutdown)
+    [self addRowWithTitle:@"确认" glyph:@"checkmark" destructive:YES
                     action:action last:NO];
     [self addRowWithTitle:@"取消" glyph:@"xmark" destructive:NO
                     action:C18PowerActionCancel last:YES];
     self.card = saved;
     [confirm layoutRows];
+
+    // Full-screen shield: while the confirmation is up, the menu rows and the
+    // floating power circle underneath must not react to touches at all.
+    UIView *shield = [[UIView alloc] initWithFrame:self.overlayView.bounds];
+    shield.backgroundColor = [UIColor clearColor];
+    shield.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    UITapGestureRecognizer *shieldTap = [[UITapGestureRecognizer alloc] initWithTarget:self
+                                                                               action:@selector(backgroundTapped)];
+    [shield addGestureRecognizer:shieldTap];
+    shield.alpha = 0;
+    [self.overlayView addSubview:shield];
+    self.confirmShield = shield;
 
     confirm.alpha = 0;
     confirm.transform = CGAffineTransformMakeScale(0.92, 0.92);
@@ -685,6 +705,7 @@ static const CGFloat kNudgeY = 23.0;   // half a row down
 
     [UIView animateWithDuration:0.22 delay:0 usingSpringWithDamping:0.8 initialSpringVelocity:0.3
                         options:UIViewAnimationOptionCurveEaseOut animations:^{
+        shield.alpha = 1;
         confirm.alpha = 1;
         confirm.transform = CGAffineTransformIdentity;
     } completion:nil];

@@ -75,28 +75,24 @@ jobs:
           ls -l dist/*.deb || { echo "no deb, skip release"; exit 0; }
           DEB=$(ls -t dist/*.deb | head -1)
           cp "$DEB" /tmp/C18PowerMenu_roothide_arm64e.deb
-          TAG="v1.7.13"
+          TAG="v1.7.14"
           cat > /tmp/notes.md <<'NOTES'
-          C18 Power Menu 1.7.13 (roothide / arm64e)
+          C18 Power Menu 1.7.14 (roothide / arm64e)
+
+          Confirmation polish:
+          - while the second card is up, a transparent shield covers the menu (and the floating power circle), so nothing underneath reacts to taps: 确认 / 取消 are the only live controls
+          - the confirmation card now shares the menu's x position and width instead of being centred, so both line up on the right edge; it is vertically centred on screen
+          - 确认 is red for both 重启设备 and 设备关机
 
           Menu: 快速注销 / 重启空间 / 安全模式 / 重启设备 / 设备关机 / 取消操作.
-          - 重启桌面 (ldrestart) removed - it duplicated respring without resetting daemons.
-          - 重启设备 and 设备关机 now ask first: a second small card "是否确认重启设备？" / "是否确认关机？" with 确认 / 取消, same material, tap outside to cancel.
+          Actions: respring = SpringBoard SIGTERM; 重启空间 = libroothide-translated /usr/bin/launchctl reboot userspace (ldrestart fallback); 安全模式 = killall -SEGV SpringBoard with in-process fault fallback; 重启设备 = shutdownAndReboot:YES; 设备关机 = shutdownAndReboot:NO.
 
-          Actions, matching what PowerSelector11 (ichitaso) does:
-          - 快速注销 = SpringBoard SIGTERM (respring)
-          - 重启空间 = translated /usr/bin/launchctl reboot userspace (same call CCRespring makes), ldrestart as fallback
-          - 安全模式 = killall -SEGV SpringBoard with an in-process forced fault as fallback
-          - 重启设备 = FBSystemService shutdownAndReboot:YES
-          - 设备关机 = FBSystemService shutdownAndReboot:NO
-          PowerSelector11 confirms both of these on-device paths: it also uses FBSystemService shutdownAndReboot:, and for userspace reboot it ships an entitled helper that talks to launchd over XPC (entitlement com.apple.private.xpc.launchd.userspace-reboot). If the launchctl spawn in our package is refused on your device, the log will say so and we can ship the same kind of helper.
-
-          Diagnostics: /var/mobile/Library/C18PowerMenu.log - libroothide load result, jbroot probe, every spawn candidate and rc.
+          Diagnostics: /var/mobile/Library/C18PowerMenu.log
           NOTES
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb --clobber
-            gh release edit "$TAG" --title "C18 Power Menu 1.7.13 (roothide / arm64e)" --notes-file /tmp/notes.md
+            gh release edit "$TAG" --title "C18 Power Menu 1.7.14 (roothide / arm64e)" --notes-file /tmp/notes.md
           else
             gh release create "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb \
-              --title "C18 Power Menu 1.7.13 (roothide / arm64e)" --notes-file /tmp/notes.md
+              --title "C18 Power Menu 1.7.14 (roothide / arm64e)" --notes-file /tmp/notes.md
           fi
