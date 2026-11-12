@@ -50,6 +50,7 @@ jobs:
         run: |
           set -x
           exec > >(tee build-log.txt) 2>&1
+          rm -rf packages dist
           make clean || true
           make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide ARCHS=arm64e
           ls -l packages || true
@@ -62,12 +63,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           touch install-log.txt build-log.txt
+          git rm -r --cached dist >/dev/null 2>&1 || true
+          rm -rf dist && mkdir -p dist
+          if ls packages/*.deb >/dev/null 2>&1; then cp packages/*.deb dist/; fi
           git add -f install-log.txt build-log.txt ci-probe.txt || true
-          if ls dist/*.deb >/dev/null 2>&1; then git add -f dist/*.deb; fi
+          git add -A dist || true
           if git diff --cached --quiet; then
             echo "nothing to commit"
           else
-            git commit -m "ci logs [skip ci]" || true
+            git commit -m "ci logs and deb [skip ci]" || true
             for i in 1 2 3; do
               git pull --rebase origin main && git push origin HEAD:main && break || sleep 5
             done
@@ -79,14 +83,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ls -l dist/*.deb || { echo "no deb, skip release"; exit 0; }
+          DEB=$(ls -t dist/*.deb | head -1)
+          cp "$DEB" /tmp/C18PowerMenu_roothide_arm64e.deb
+          echo "publishing $DEB"
+          dpkg-deb -f "$DEB" Version Architecture Maintainer
           TAG="v1.2.0"
-          cp dist/*.deb dist/C18PowerMenu_roothide_arm64e.deb
           cat > /tmp/notes.md <<'NOTES'
           C18 Power Menu 1.2.0（roothide / arm64e）
 
           短按控制中心电源键：弹出原生 UIAlertController 菜单，六项：注销 / 重启 / 关机 / 安全模式 / 软重启设备 / 重启用户空间，外加取消。
 
-          长按电源图标：若已安装 CCRespring，直接实例化它的 CCRespringCCUIMenuModuleViewController，展示它自己的菜单；呈现失败时自动回退到短按菜单。
+          长按电源图标：若已安装 CCRespring，直接实例化它的 CCRespringCCUIMenuModuleViewController，展示它自己的菜单；呈现失败自动回退到短按菜单。
 
           本版修复：
           - 1.1.0 直接 present CCUIMenuModuleViewController 会留下一层透明视图抢走点击，导致短按完全无反应，本版已移除该路径。
@@ -95,9 +102,9 @@ jobs:
           构建：macos-15-intel + roothide Theos + iPhoneOS 16.5 SDK，THEOS_PACKAGE_SCHEME=roothide，ARCHS=arm64e。
           NOTES
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "dist/C18PowerMenu_roothide_arm64e.deb" --clobber
+            gh release upload "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb --clobber
             gh release edit "$TAG" --title "C18 Power Menu 1.2.0 (roothide / arm64e)" --notes-file /tmp/notes.md
           else
-            gh release create "$TAG" "dist/C18PowerMenu_roothide_arm64e.deb" \
+            gh release create "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb \
               --title "C18 Power Menu 1.2.0 (roothide / arm64e)" --notes-file /tmp/notes.md
           fi
