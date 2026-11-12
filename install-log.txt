@@ -58,7 +58,7 @@ SDK: https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5
   % Total    % Received % Xferd  Average Speed  Time    Time    Time   Current
                                  Dload  Upload  Total   Spent   Left   Speed
   0      0   0      0   0      0      0      0                              0  0      0   0      0   0      0      0      0                              0  0      0   0      0   0      0      0      0                              0
-  0      0   0      0   0      0      0      0                              0100 16.63M 100 16.63M   0      0 25.30M      0                              0100 16.63M 100 16.63M   0      0 25.28M      0                              0100 16.63M 100 16.63M   0      0 25.27M      0                              0
+  0      0   0      0   0      0      0      0                              0100 16.63M 100 16.63M   0      0 32.72M      0                              0100 16.63M 100 16.63M   0      0 32.71M      0                              0100 16.63M 100 16.63M   0      0 32.70M      0                              0
 + tar -xf /tmp/sdk.tar.xz -C /Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/sdks
 + ls /Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/sdks
 iPhoneOS16.5.sdk
