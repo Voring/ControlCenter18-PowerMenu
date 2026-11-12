@@ -1,0 +1,32 @@
+name: Build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Theos
+        run: |
+          brew install ldid xz
+          git clone --recursive --depth 1 https://github.com/theos/theos.git "$HOME/theos"
+          mkdir -p "$HOME/theos/sdks"
+          curl -L -o /tmp/sdk.tar.xz https://github.com/theos/sdks/releases/download/master/iPhoneOS16.5.sdk.tar.xz
+          tar -xf /tmp/sdk.tar.xz -C "$HOME/theos/sdks"
+
+      - name: Build package
+        env:
+          THEOS: ${{ github.workspace }}/../theos
+        run: |
+          make clean
+          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless ARCHS=arm64
+
+      - name: Upload deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: C18PowerMenu-deb
+          path: packages/*.deb
