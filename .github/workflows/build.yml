@@ -75,19 +75,25 @@ jobs:
           ls -l dist/*.deb || { echo "no deb, skip release"; exit 0; }
           DEB=$(ls -t dist/*.deb | head -1)
           cp "$DEB" /tmp/C18PowerMenu_roothide_arm64e.deb
-          TAG="v1.7.8"
+          TAG="v1.7.9"
           cat > /tmp/notes.md <<'NOTES'
-          C18 Power Menu 1.7.8 (roothide / arm64e)
+          C18 Power Menu 1.7.9 (roothide / arm64e)
 
-          1. Backdrop blur softened one notch (SystemThinMaterial -> SystemUltraThinMaterial), still full alpha, no graying, no dim.
-          2. Drop-down animation: the card starts 18pt above its final spot at 0.92 scale and springs down into place; backdrop fades in.
+          Actions aligned to CCRespring's six functions (our names/order kept):
+          1. 快速注销 = Respring: graceful SpringBoard restart (SIGTERM).
+          2. 重启桌面 = LDRestart: ldrestart binary, falls back to respring.
+          3. 重启空间 = RebootUserspace: rebootUserspace selector, falls back to launchctl reboot userspace.
+          4. 安全模式 = SafeMode: safeMode selector, falls back to SIGSEGV.
+          5. 重启设备 = Reboot: reboot / shutdownAndReboot: selector, falls back to /usr/bin/reboot.
+          6. 设备关机 = Shutdown: SBLockScreenManager power overlay, falls back to shutdown selector.
 
+          Also: press highlight now uses labelColor so it shows in light mode; the first service call dumps FBSystemService's reboot/shutdown selectors to the log for diagnosis.
           Log: /var/mobile/Library/C18PowerMenu.log
           NOTES
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb --clobber
-            gh release edit "$TAG" --title "C18 Power Menu 1.7.8 (roothide / arm64e)" --notes-file /tmp/notes.md
+            gh release edit "$TAG" --title "C18 Power Menu 1.7.9 (roothide / arm64e)" --notes-file /tmp/notes.md
           else
             gh release create "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb \
-              --title "C18 Power Menu 1.7.8 (roothide / arm64e)" --notes-file /tmp/notes.md
+              --title "C18 Power Menu 1.7.9 (roothide / arm64e)" --notes-file /tmp/notes.md
           fi
