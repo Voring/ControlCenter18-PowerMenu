@@ -1,3 +1,4 @@
++ rm -rf packages dist
 + make clean
 [0;36m==> [1;39mCleaning…[m
 + make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide ARCHS=arm64e
