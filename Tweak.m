@@ -117,6 +117,7 @@ static UIImage *C18Glyph(NSString *name, CGFloat point) {
 @property (nonatomic, copy) void (^handler)(C18PowerAction);
 @property (nonatomic, strong) UIVisualEffectView *blur;
 @property (nonatomic, strong) UIView *card;
+@property (nonatomic, assign) CGRect buttonFrame;
 @end
 
 @implementation C18MenuViewController
@@ -145,7 +146,7 @@ static const CGFloat kSideInset = 18.0;
     [dim addGestureRecognizer:tap];
 
     NSArray<NSDictionary *> *items = C18MenuItems();
-    CGFloat cardWidth = MIN(CGRectGetWidth(self.view.bounds) * 0.62, 300);
+    CGFloat cardWidth = MIN(CGRectGetWidth(self.view.bounds) * 0.66, 280);
     CGFloat cardHeight = kRowHeight * items.count;
 
     self.card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, cardWidth, cardHeight)];
@@ -194,9 +195,22 @@ static const CGFloat kSideInset = 18.0;
 
 - (void)layoutCard {
     CGSize size = self.card.bounds.size;
+    CGFloat W = CGRectGetWidth(self.view.bounds);
+    CGFloat H = CGRectGetHeight(self.view.bounds);
     CGFloat safeTop = self.view.safeAreaInsets.top;
-    CGFloat top = (safeTop > 0 ? safeTop : 44) + 40;
-    self.card.frame = CGRectMake((CGRectGetWidth(self.view.bounds) - size.width) / 2, top, size.width, size.height);
+    CGFloat top, right;
+    if (!CGRectIsEmpty(self.buttonFrame)) {
+        top = CGRectGetMaxY(self.buttonFrame) + 10;
+        right = CGRectGetMaxX(self.buttonFrame);
+    } else {
+        top = (safeTop > 0 ? safeTop : 44) + 16;
+        right = W - 24;
+    }
+    CGFloat x = right - size.width;
+    if (x < 12) x = 12;
+    if (x + size.width > W - 12) x = W - 12 - size.width;
+    if (top + size.height > H - 24) top = H - 24 - size.height;
+    self.card.frame = CGRectMake(x, top, size.width, size.height);
 }
 
 - (void)viewDidLayoutSubviews {
@@ -225,6 +239,25 @@ static const CGFloat kSideInset = 18.0;
 
 #pragma mark - Presentation helpers
 
+static void C18CollectPowerFrame(UIView *view, CGRect *out, int depth) {
+    if (!view || depth > 10) return;
+    NSString *cls = NSStringFromClass([view class]);
+    if ([cls.lowercaseString containsString:@"power"] && view.window) {
+        CGRect f = [view.window convertRect:view.bounds fromView:view];
+        if (f.size.width > 20 && f.size.height > 20) { *out = f; return; }
+    }
+    for (UIView *sub in view.subviews) C18CollectPowerFrame(sub, out, depth + 1);
+}
+
+static CGRect C18PowerButtonFrame(void) {
+    CGRect f = CGRectZero;
+    for (UIWindow *w in [UIApplication sharedApplication].windows) {
+        C18CollectPowerFrame(w.rootViewController.view, &f, 0);
+        if (!CGRectIsEmpty(f)) break;
+    }
+    return f;
+}
+
 static UIViewController *C18TopViewController(void) {
     UIApplication *app = [UIApplication sharedApplication];
     UIWindow *key = nil;
@@ -248,6 +281,7 @@ static void C18ShowPowerMenu(id target, SEL cmd, PresentIMP original) {
         UIViewController *host = C18TopViewController();
 
         C18MenuViewController *menu = [[C18MenuViewController alloc] init];
+        menu.buttonFrame = C18PowerButtonFrame();
         menu.handler = ^(C18PowerAction action) {
             g_presenting = NO;
             C18RunAction(action, original, target, cmd);
