@@ -1,0 +1,64 @@
++ brew install ldid xz
+[33mWarning:[0m xz 5.8.3 is already installed and up-to-date.
+To reinstall 5.8.3, run:
+  brew reinstall xz
+[32m==>[0m [1mDownloading bottle manifests[0m
+✔︎ Bottle Manifest ldid (2.1.5_1)
+[34m==>[0m [1mWould install 1 formula:[0m
+ldid
+[34m==>[0m [1mWould install 1 dependency for ldid:[0m
+libplist
+[32m==>[0m [1mFetching downloads for: [32mldid[39m[0m
+✔︎ Bottle Manifest libplist (2.7.0)
+✔︎ Bottle ldid (2.1.5_1)
+✔︎ Bottle libplist (2.7.0)
+[32m==>[0m [1mInstalling ldid dependency: [32mlibplist[39m[0m
+[34m==>[0m [1mPouring libplist--2.7.0.sonoma.bottle.tar.gz[0m
+🍺  /usr/local/Cellar/libplist/2.7.0: 32 files, 555.6KB
+[32m==>[0m [1mInstalling [32mldid[39m[0m
+[34m==>[0m [1mPouring ldid--2.1.5_1.sonoma.bottle.1.tar.gz[0m
+🍺  /usr/local/Cellar/ldid/2.1.5_1: 6 files, 238.9KB
++ rm -rf /Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos
++ git clone --recursive --depth 1 https://github.com/roothide/theos.git /Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos
+Cloning into '/Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos'...
+Submodule 'vendor/dm.pl' (https://github.com/theos/dm.pl.git) registered for path 'vendor/dm.pl'
+Submodule 'vendor/include' (https://github.com/roothide/headers.git) registered for path 'vendor/include'
+Submodule 'vendor/lib' (https://github.com/roothide/lib.git) registered for path 'vendor/lib'
+Submodule 'vendor/logos' (https://github.com/theos/logos.git) registered for path 'vendor/logos'
+Submodule 'vendor/nic' (https://github.com/theos/nic.git) registered for path 'vendor/nic'
+Submodule 'vendor/orion' (https://github.com/theos/orion.git) registered for path 'vendor/orion'
+Submodule 'vendor/swift-support' (https://github.com/theos/swift-support.git) registered for path 'vendor/swift-support'
+Submodule 'vendor/templates' (https://github.com/theos/templates.git) registered for path 'vendor/templates'
+Cloning into '/Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/vendor/dm.pl'...
+Cloning into '/Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/vendor/include'...
+Cloning into '/Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/vendor/lib'...
+Cloning into '/Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/vendor/logos'...
+Cloning into '/Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/vendor/nic'...
+Cloning into '/Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/vendor/orion'...
+Cloning into '/Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/vendor/swift-support'...
+Cloning into '/Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/vendor/templates'...
+Submodule path 'vendor/dm.pl': checked out 'd9a3b72e274226dd2823c0a7c1d6d05099f4f51c'
+Submodule path 'vendor/include': checked out 'e1132e2bbc3ca15c50e2311bcd349cb7353409e1'
+Submodule path 'vendor/lib': checked out '85e9b5b8aff11bbefc59525c64c8f55149926e56'
+Submodule path 'vendor/logos': checked out '365a4e7028234e90bc2cbc724e5c87607130d3b3'
+Submodule path 'vendor/nic': checked out '4e7adcbeac2e4636b91e2f76341adfe4c4d0ceec'
+Submodule path 'vendor/orion': checked out '762159dc214d5aafa2edfc7554c659fc3c658b5b'
+Submodule 'fishhook' (https://github.com/facebook/fishhook.git) registered for path 'vendor/orion/fishhook'
+Cloning into '/Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/vendor/orion/fishhook'...
+Submodule path 'vendor/orion/fishhook': checked out 'aadc161ac3b80db07a9908851839a17ba63a9eb1'
+Submodule path 'vendor/swift-support': checked out '4cf59ff04cdb2ceb27ea2228753e0497297b6182'
+Submodule path 'vendor/templates': checked out '6c3944e281c4726f1383755d0fbb642840312d28'
++ mkdir -p /Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/sdks
+++ curl -sL https://api.github.com/repos/theos/sdks/releases/latest
+++ python3 -c 'import sys,json;d=json.load(sys.stdin);print(next(a['\''browser_download_url'\''] for a in d['\''assets'\''] if a['\''name'\'']=='\''iPhoneOS16.5.sdk.tar.xz'\''))'
++ SDK_URL=https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz
++ echo 'SDK: https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz'
+SDK: https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz
++ curl -L --fail -o /tmp/sdk.tar.xz https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz
+  % Total    % Received % Xferd  Average Speed  Time    Time    Time   Current
+                                 Dload  Upload  Total   Spent   Left   Speed
+  0      0   0      0   0      0      0      0                              0  0      0   0      0   0      0      0      0                              0  0      0   0      0   0      0      0      0                              0
+  0      0   0      0   0      0      0      0                              0100 16.63M 100 16.63M   0      0 46.24M      0                              0100 16.63M 100 16.63M   0      0 46.20M      0                              0100 16.63M 100 16.63M   0      0 46.18M      0                              0
++ tar -xf /tmp/sdk.tar.xz -C /Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/sdks
++ ls /Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/sdks
+iPhoneOS16.5.sdk
