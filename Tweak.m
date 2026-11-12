@@ -3,9 +3,8 @@
 // The long press on CC18's power glyph (top-right of Control Center) still ends
 // up in presentPowerDownTransientOverlay, which we hook. We show a card that
 // copies the system menu look - same blurred material, title on the left, SF
-// symbol on the right - pinned right under that glyph. The card lives inside
-// the existing key window (a brand-new UIWindow in SpringBoard does not reliably
-// receive touches).
+// symbol on the right - pinned right under that glyph, with the power button
+// itself kept crisp as a floating circle in the same layer.
 
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -14,6 +13,8 @@
 #import <spawn.h>
 #import <sys/wait.h>
 #import <fcntl.h>
+#import <signal.h>
+#import <unistd.h>
 
 extern char **environ;
 
@@ -91,6 +92,7 @@ static BOOL C18SpawnPath(NSString *path, NSArray<NSString *> *args) {
     pid_t pid = 0;
     int rc = posix_spawn(&pid, path.UTF8String, &actions, NULL, (char *const *)argv, environ);
     posix_spawn_file_actions_destroy(&actions);
+    C18Log(@"posix_spawn(%@) rc=%d errno=%d", path, rc, rc == 0 ? 0 : errno);
     return rc == 0 && pid > 0;
 }
 
@@ -100,35 +102,67 @@ static void C18Run(NSString *relative, NSArray<NSString *> *args) {
             C18Log(@"skip %@ (not executable)", path);
             continue;
         }
-        BOOL ok = C18SpawnPath(path, args);
-        C18Log(@"spawn %@ %@ -> %d", path, [args componentsJoinedByString:@" "], ok);
-        if (ok) return;
+        if (C18SpawnPath(path, args)) return;
     }
-    C18Log(@"spawn %@ FAILED (no executable candidate)", relative);
+    C18Log(@"spawn %@ FAILED", relative);
 }
 
 #pragma mark - actions
+
+// Killing SpringBoard is the sure way to respring: backboardd relaunches it.
+// posix_spawn of killall from inside SpringBoard is blocked by the sandbox.
+static void C18KillSelf(int signal) {
+    C18Log(@"kill SpringBoard with signal %d", signal);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        kill(getpid(), signal);
+    });
+}
+
+// Some SpringBoard builds expose reboot/shutdown helpers; use them before
+// falling back to spawning a binary.
+static BOOL C18CallSystemService(NSArray<NSString *> *selectors) {
+    Class cls = NSClassFromString(@"FBSystemService");
+    if (!cls) return NO;
+    id inst = nil;
+    SEL sharedSel = NSSelectorFromString(@"sharedInstance");
+    if ([cls respondsToSelector:sharedSel]) {
+        inst = ((id (*)(id, SEL))objc_msgSend)(cls, sharedSel);
+    }
+    if (!inst) inst = [cls new];
+    for (NSString *name in selectors) {
+        SEL sel = NSSelectorFromString(name);
+        if (![inst respondsToSelector:sel]) continue;
+        C18Log(@"FBSystemService %@", name);
+        ((void (*)(id, SEL))objc_msgSend)(inst, sel);
+        return YES;
+    }
+    return NO;
+}
 
 static void C18RunAction(C18PowerAction action) {
     C18Log(@"action %ld", (long)action);
     switch (action) {
         case C18PowerActionSoftRespring:
-            C18Run(@"/usr/bin/sbreload", @[]);
+            C18KillSelf(SIGTERM);
             break;
         case C18PowerActionHardRespring:
-            C18Run(@"/usr/bin/killall", @[@"-9", @"SpringBoard"]);
+            C18KillSelf(SIGKILL);
             break;
         case C18PowerActionRestartDesktop:
-            C18Run(@"/usr/bin/killall", @[@"SpringBoard"]);
+            C18KillSelf(SIGTERM);
             break;
         case C18PowerActionSafeMode:
-            C18Run(@"/usr/bin/killall", @[@"-SEGV", @"SpringBoard"]);
+            C18KillSelf(SIGSEGV);
             break;
         case C18PowerActionUserspaceReboot:
-            C18Run(@"/bin/launchctl", @[@"reboot", @"userspace"]);
+            if (!C18CallSystemService(@[@"userspaceReboot", @"rebootUserspace"])) {
+                C18Run(@"/bin/launchctl", @[@"reboot", @"userspace"]);
+            }
             break;
         case C18PowerActionReboot:
-            C18Run(@"/usr/bin/reboot", @[]);
+            if (!C18CallSystemService(@[@"reboot", @"exitAndReboot", @"shutdownAndReboot"])) {
+                C18Run(@"/usr/bin/reboot", @[]);
+            }
             break;
         case C18PowerActionShutdown: {
             Class mgr = NSClassFromString(@"SBLockScreenManager");
@@ -141,9 +175,8 @@ static void C18RunAction(C18PowerAction action) {
             if (inst && [inst respondsToSelector:sel]) {
                 C18Log(@"shutdown via SBLockScreenManager");
                 ((void (*)(id, SEL))objc_msgSend)(inst, sel);
-            } else {
-                C18Log(@"shutdown fallback (instance=%d)", inst != nil);
-                C18Run(@"/usr/bin/halt", @[]);
+            } else if (!C18CallSystemService(@[@"shutdown", @"exitAndShutdown"])) {
+                C18Log(@"shutdown failed (instance=%d)", inst != nil);
             }
             break;
         }
@@ -395,12 +428,12 @@ static BOOL C18ShowMenu(void) {
 
     UIVisualEffectView *backdrop = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
     backdrop.frame = screen;
-    backdrop.alpha = 0.75;
+    backdrop.alpha = 1.0;
     backdrop.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [overlay addSubview:backdrop];
 
     UIView *dim = [[UIView alloc] initWithFrame:screen];
-    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.12];
+    dim.backgroundColor = [UIColor colorWithWhite:0 alpha:0.16];
     dim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:vc action:@selector(backgroundTapped)];
     [dim addGestureRecognizer:tap];
@@ -422,10 +455,10 @@ static BOOL C18ShowMenu(void) {
     CGFloat x = MIN(MAX(glyph.origin.x + glyph.size.width - cardWidth, 12), right - cardWidth);
     CGFloat y = glyph.origin.y + glyph.size.height + 8;
 
-    // Nudge: up one row, left half a row, so the card reads as opening under
+    // Nudge: up half a row, left half a row, so the card reads as opening under
     // the power button itself.
     x -= 23;
-    y -= 46;
+    y -= 23;
     if (x < 12) x = 12;
     if (y + cardHeight > screen.size.height - 40) {
         y = MAX(glyph.origin.y - cardHeight - 8, 40);
@@ -435,6 +468,29 @@ static BOOL C18ShowMenu(void) {
     C18MenuCard *card = [[C18MenuCard alloc] initWithFrame:CGRectMake(x, y, cardWidth, cardHeight)];
     vc.card = card;
     [overlay addSubview:card];
+
+    // The real glyph is now hidden behind the blur; redraw it as a floating
+    // circle in the same layer so the button stays crisp, at its own position.
+    CGFloat side = MAX(34, MIN(glyph.size.width, 42));
+    UIView *circle = [[UIView alloc] initWithFrame:CGRectMake(CGRectGetMidX(glyph) - side / 2,
+                                                             CGRectGetMidY(glyph) - side / 2,
+                                                             side, side)];
+    circle.backgroundColor = [UIColor colorWithWhite:1 alpha:0.24];
+    circle.layer.cornerRadius = side / 2;
+    circle.layer.cornerCurve = kCACornerCurveContinuous;
+
+    UIImageView *powerIcon = [[UIImageView alloc] initWithImage:
+        [UIImage systemImageNamed:@"power"
+              withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:19 weight:UIImageSymbolWeightSemibold]]];
+    powerIcon.tintColor = [UIColor labelColor];
+    powerIcon.contentMode = UIViewContentModeScaleAspectFit;
+    powerIcon.frame = CGRectMake((side - 22) / 2, (side - 22) / 2, 22, 22);
+    powerIcon.userInteractionEnabled = NO;
+    [circle addSubview:powerIcon];
+
+    UITapGestureRecognizer *circleTap = [[UITapGestureRecognizer alloc] initWithTarget:vc action:@selector(backgroundTapped)];
+    [circle addGestureRecognizer:circleTap];
+    [overlay addSubview:circle];
 
     for (NSDictionary *item in items) {
         [vc addRowWithTitle:item[@"t"] glyph:item[@"g"] destructive:NO
