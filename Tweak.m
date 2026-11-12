@@ -77,7 +77,7 @@ static BOOL C18SpawnPath(NSString *path, NSArray<NSString *> *args) {
     int i = 0;
     argv[i++] = strdup(path.UTF8String);
     for (NSString *arg in args) {
-        if (i >= 15) break;
+        if (i >= 16) break;
         argv[i++] = strdup(arg.UTF8String);
     }
     argv[i] = NULL;
@@ -167,7 +167,7 @@ static void C18RunAction(C18PowerAction action) {
             SEL sharedSel = NSSelectorFromString(@"sharedInstanceIfExists");
             id inst = nil;
             if ([mgr respondsToSelector:sharedSel]) {
-                inst = ((id (*)(id, SEL))objc_msgSend)(mgr, sharedSel);
+                inst = ((id (*)(id, SEL))msgInstance(mgr, sharedSel);
             }
             SEL sel = NSSelectorFromString(@"presentPowerDownTransientOverlay");
             if (inst && [inst respondsToSelector:sel]) {
@@ -223,12 +223,12 @@ static CGRect C18GlyphRect(void) {
 
 static const CGFloat kRowHeight = 46.0;
 
-// Backdrop numbers: iOS home-screen context menus do not stack a half-transparent
-// blur plus a heavy dim - they run one full-strength system material and let the
-// material do the darkening. Thin material at alpha 1.0 is the closest public
-// equivalent, so we keep the extra dim down to a hairline 0.06.
+// Backdrop: one full-strength *adaptive* system material and no manual dim.
+// The adaptive style follows light/dark mode by itself, so light mode stays
+// light and dark mode gets its own darkening from the material - we never add
+// a black overlay on top of it.
 static const CGFloat kBackdropAlpha = 1.0;
-static const CGFloat kDimAlpha = 0.06;
+static const CGFloat kDimAlpha = 0.0;   // no dimming at all
 static const CGFloat kNudgeX = 11.5;   // half a row left, a quarter row back right
 static const CGFloat kNudgeY = 23.0;   // half a row down
 
@@ -433,7 +433,7 @@ static BOOL C18ShowMenu(void) {
     UIView *overlay = [[UIView alloc] initWithFrame:screen];
     overlay.backgroundColor = [UIColor clearColor];
 
-    UIVisualEffectView *backdrop = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
+    UIVisualEffectView *backdrop = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterial]];
     backdrop.frame = screen;
     backdrop.alpha = kBackdropAlpha;
     backdrop.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
