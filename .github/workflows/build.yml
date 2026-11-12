@@ -23,7 +23,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          { date -u; uname -m; sw_vers; echo THEOS_PLACEHOLDER; } | tee ci-probe.txt
+          { date -u; uname -m; sw_vers; } | tee ci-probe.txt
           git add -f ci-probe.txt
           git commit -m "ci probe [skip ci]" || true
           git push origin HEAD:main || true
@@ -55,7 +55,8 @@ jobs:
           make clean || true
           make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide ARCHS=arm64e
           ls -l packages || true
-          for f in packages/*.deb; do dpkg-deb -f "$f" Package Architecture Version Maintainer || true; done
+          for f in packages/*.deb; do dpkg-deb -f "$f" Package Architecture Version Maintainer || true; file "$f" || true; done
+          mkdir -p dist && cp packages/*.deb dist/ 2>/dev/null || true
 
       - name: Commit logs and deb
         if: always()
@@ -64,7 +65,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           touch install-log.txt build-log.txt
           git add -f install-log.txt build-log.txt ci-probe.txt || true
-          if ls packages/*.deb >/dev/null 2>&1; then mkdir -p dist; cp packages/*.deb dist/; git add -f dist/*.deb; fi
+          if ls dist/*.deb >/dev/null 2>&1; then git add -f dist/*.deb; fi
           if git diff --cached --quiet; then
             echo "nothing to commit"
           else
@@ -73,4 +74,21 @@ jobs:
               git pull --rebase origin main && git push origin HEAD:main && break || sleep 5
             done
           fi
-          git log --oneline -3
+
+      - name: Publish Release
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ls -l dist/*.deb || { echo "no deb, skip release"; exit 0; }
+          DEB=$(ls dist/*.deb | head -1)
+          TAG="v1.0.0"
+          cp "$DEB" "dist/C18PowerMenu_roothide_arm64e.deb"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "dist/C18PowerMenu_roothide_arm64e.deb" --clobber
+          else
+            gh release create "$TAG" "dist/C18PowerMenu_roothide_arm64e.deb" \
+              --title "C18 Power Menu 1.0.0 (roothide / arm64e)" \
+              --notes "ControlCenter18 电源键 → 原生菜单：注销 / 重启 / 关机 / 安全模式 / 软重启设备 / 重启用户空间。\n\n构建：macos-15-intel + roothide Theos + iPhoneOS 16.5 SDK，THEOS_PACKAGE_SCHEME=roothide，ARCHS=arm64e。"
+          fi
+          gh release view "$TAG"
