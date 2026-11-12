@@ -54,6 +54,6 @@ Submodule path 'vendor/templates': checked out '6c3944e281c4726f1383755d0fbb6428
   % Total    % Received % Xferd  Average Speed  Time    Time    Time   Current
                                  Dload  Upload  Total   Spent   Left   Speed
   0      0   0      0   0      0      0      0                              0  0      0   0      0   0      0      0      0                              0  0      0   0      0   0      0      0      0                              0
-  0      0   0      0   0      0      0      0                              0100 16.63M 100 16.63M   0      0 49.69M      0                              0100 16.63M 100 16.63M   0      0 49.68M      0                              0100 16.63M 100 16.63M   0      0 49.65M      0                              0
+  0      0   0      0   0      0      0      0                              0100 16.63M 100 16.63M   0      0 38.62M      0                              0100 16.63M 100 16.63M   0      0 38.60M      0                              0100 16.63M 100 16.63M   0      0 38.59M      0                              0
 + tar -xf /tmp/sdk.tar.xz -C /Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/sdks
 + test -d /Users/runner/work/ControlCenter18-PowerMenu/ControlCenter18-PowerMenu/theos/sdks/iPhoneOS16.5.sdk
