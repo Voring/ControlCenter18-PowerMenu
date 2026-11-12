@@ -75,27 +75,30 @@ jobs:
           ls -l dist/*.deb || { echo "no deb, skip release"; exit 0; }
           DEB=$(ls -t dist/*.deb | head -1)
           cp "$DEB" /tmp/C18PowerMenu_roothide_arm64e.deb
-          TAG="v1.7.11"
+          TAG="v1.7.12"
           cat > /tmp/notes.md <<'NOTES'
-          C18 Power Menu 1.7.11 (roothide / arm64e)
+          C18 Power Menu 1.7.12 (roothide / arm64e)
 
-          Userspace reboot now uses roothide's own path translation instead of a guessed /var/jb:
+          This build actually contains the fixes. The 1.7.10 and 1.7.11 packages were built from a stale source snapshot, so please install 1.7.12 instead.
+
+          Userspace reboot now mirrors CCRespring exactly:
           - loads libroothide.dylib and calls its exported const char *jbroot(const char *)
-          - launches the translated /usr/bin/launchctl reboot userspace, the exact same call CCRespring makes
-          - SpringBoard is unsandboxed by roothide, so the spawn is permitted once the path is right
+          - spawns the translated /usr/bin/launchctl with "reboot userspace"
+          - roothide unsandboxes SpringBoard (its preload calls unsandbox with the sb_token), so the spawn is allowed once the path is translated
+          - if the spawn is still refused it falls back to ldrestart, never a silent no-op
 
-          Also in this build:
-          - 重启设备 = shutdownAndReboot:YES, 设备关机 = shutdownAndReboot:NO (the previous nil argument read as NO and powered off instead of rebooting)
-          - 安全模式 keeps killall -SEGV SpringBoard, plus an in-process forced fault if the spawn is refused
-          - the log records librootide load result, translated paths and every spawn rc
+          Reboot / shutdown, based on the FBSystemService method list dumped on-device (exitAndRelaunch:, shutdownAndReboot:, shutdownWithOptions:):
+          - 重启设备 = shutdownAndReboot:YES (the old nil argument read as NO and powered the device off)
+          - 设备关机 = shutdownAndReboot:NO
 
-          Note: this jailbreak has no Substrate-style safe mode catcher, so a SpringBoard crash simply reloads - the same reason CCRespring's SafeMode also does nothing.
-          Log: /var/mobile/Library/C18PowerMenu.log
+          Safe mode keeps killall -SEGV SpringBoard plus a forced in-process fault. Note this jailbreak has no Substrate-style safe mode catcher, so a SpringBoard crash simply reloads - CCRespring's SafeMode behaves the same here.
+
+          Diagnostics land in /var/mobile/Library/C18PowerMenu.log: libroothide load result, the jbroot probe path, every spawn candidate and its rc.
           NOTES
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb --clobber
-            gh release edit "$TAG" --title "C18 Power Menu 1.7.11 (roothide / arm64e)" --notes-file /tmp/notes.md
+            gh release edit "$TAG" --title "C18 Power Menu 1.7.12 (roothide / arm64e)" --notes-file /tmp/notes.md
           else
             gh release create "$TAG" /tmp/C18PowerMenu_roothide_arm64e.deb \
-              --title "C18 Power Menu 1.7.11 (roothide / arm64e)" --notes-file /tmp/notes.md
+              --title "C18 Power Menu 1.7.12 (roothide / arm64e)" --notes-file /tmp/notes.md
           fi
