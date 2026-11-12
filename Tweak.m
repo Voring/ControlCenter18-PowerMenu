@@ -22,7 +22,7 @@ typedef void (*PresentIMP)(id, SEL);
 
 typedef NS_ENUM(NSInteger, C18PowerAction) {
     C18PowerActionSoftRespring = 0,   // 快速注销
-    C18PowerActionHardRespring,       // 强制注销
+    C18PowerActionHardRespring,       // 强制注销 (reserved)
     C18PowerActionRestartDesktop,     // 重启桌面
     C18PowerActionSafeMode,           // 安全模式
     C18PowerActionUserspaceReboot,    // 重启空间
@@ -426,6 +426,7 @@ static BOOL C18ShowMenu(void) {
 
     UIVisualEffectView *backdrop = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
     backdrop.frame = screen;
+    backdrop.alpha = 0.94;
     backdrop.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [overlay addSubview:backdrop];
 
@@ -438,7 +439,6 @@ static BOOL C18ShowMenu(void) {
 
     NSArray<NSDictionary *> *items = @[
         @{@"t": @"快速注销", @"g": @"rays",                          @"a": @(C18PowerActionSoftRespring)},
-        @{@"t": @"强制注销", @"g": @"slowmo",                        @"a": @(C18PowerActionHardRespring)},
         @{@"t": @"重启桌面", @"g": @"apps.iphone",                   @"a": @(C18PowerActionRestartDesktop)},
         @{@"t": @"安全模式", @"g": @"shield.lefthalf.filled",        @"a": @(C18PowerActionSafeMode)},
         @{@"t": @"重启空间", @"g": @"arrow.clockwise.circle",        @"a": @(C18PowerActionUserspaceReboot)},
@@ -466,12 +466,11 @@ static BOOL C18ShowMenu(void) {
     vc.card = card;
     [overlay addSubview:card];
 
-    // The real glyph sits behind the blur; redraw it as a floating circle at its
-    // own spot - nudged half a row left and one row up so it clears the card -
-    // using the same material as the card so the two read as one layer.
+    // The real glyph sits behind the blur; redraw it as a floating circle a
+    // little left of and below its own spot, using the card's own material.
     CGFloat side = MAX(34, MIN(glyph.size.width, 42));
     UIView *circle = [[UIView alloc] initWithFrame:CGRectMake(CGRectGetMidX(glyph) - side / 2 - 23,
-                                                             CGRectGetMidY(glyph) - side / 2 - 46,
+                                                             CGRectGetMidY(glyph) - side / 2 - 23,
                                                              side, side)];
     circle.backgroundColor = [UIColor clearColor];
     circle.layer.cornerRadius = side / 2;
@@ -530,7 +529,7 @@ static BOOL C18ShowMenu(void) {
         card.transform = CGAffineTransformIdentity;
         card.alpha = 1;
         circle.alpha = 1;
-        backdrop.alpha = 0.75;
+        backdrop.alpha = 0.94;
         dim.alpha = 1;
     } completion:nil];
 
